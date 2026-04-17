@@ -41,6 +41,14 @@ CONTROL_LIMIT = 1.0
 POSITION_LIMIT = 3.0
 VELOCITY_LIMIT = 2.5
 
+# Fixed outer-loop evaluation weights. These stay constant across experiments so
+# hyperparameter search cannot improve the score just by redefining the metric.
+EVAL_POSITION_WEIGHT = 8.0
+EVAL_VELOCITY_WEIGHT = 1.5
+EVAL_CONTROL_WEIGHT = 0.15
+EVAL_DELTA_U_WEIGHT = 0.35
+EVAL_TERMINAL_MULTIPLIER = 3.0
+
 # Fixed plant: double integrator with a constant disturbance state.
 A = torch.tensor([
     [1.0, DT, 0.0, 0.0],
@@ -67,12 +75,12 @@ B = torch.tensor([
 
 @dataclass
 class MPCParams:
-    horizon: int = 16
+    horizon: int = 18
     position_weight: float = 8.0
-    velocity_weight: float = 1.2
-    control_weight: float = 0.08
-    delta_u_weight: float = 0.18
-    terminal_multiplier: float = 2.5
+    velocity_weight: float = 1.5
+    control_weight: float = 0.15
+    delta_u_weight: float = 0.35
+    terminal_multiplier: float = 3.0
 
 
 # ---------------------------------------------------------------------------
@@ -223,11 +231,11 @@ def simulate_closed_loop(params: MPCParams) -> dict[str, float]:
 
             tracking_error = torch.tensor([x[0] - x[2], x[1] - x[3]], dtype=DTYPE)
             total_tracking_cost += (
-                params.position_weight * tracking_error[0].pow(2).item()
-                + params.velocity_weight * tracking_error[1].pow(2).item()
+                EVAL_POSITION_WEIGHT * tracking_error[0].pow(2).item()
+                + EVAL_VELOCITY_WEIGHT * tracking_error[1].pow(2).item()
             )
-            total_control_cost += params.control_weight * u.pow(2).sum().item()
-            total_slew_cost += params.delta_u_weight * applied_delta_u.pow(2).sum().item()
+            total_control_cost += EVAL_CONTROL_WEIGHT * u.pow(2).sum().item()
+            total_slew_cost += EVAL_DELTA_U_WEIGHT * applied_delta_u.pow(2).sum().item()
 
             x = A @ x + B @ u
             x, raw_violation = clamp_state(x)
@@ -235,9 +243,9 @@ def simulate_closed_loop(params: MPCParams) -> dict[str, float]:
             previous_u = u
 
         final_tracking_error = torch.tensor([x[0] - x[2], x[1] - x[3]], dtype=DTYPE)
-        terminal_tracking_cost += params.terminal_multiplier * (
-            params.position_weight * final_tracking_error[0].pow(2).item()
-            + params.velocity_weight * final_tracking_error[1].pow(2).item()
+        terminal_tracking_cost += EVAL_TERMINAL_MULTIPLIER * (
+            EVAL_POSITION_WEIGHT * final_tracking_error[0].pow(2).item()
+            + EVAL_VELOCITY_WEIGHT * final_tracking_error[1].pow(2).item()
         )
 
     normalizer = float(NUM_SCENARIOS * ROLLOUT_STEPS)
