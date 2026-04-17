@@ -1,0 +1,9 @@
+Linear MPC benchmark
+params: {'horizon': 6, 'position_weight': 7.0, 'velocity_weight': 2.3, 'control_weight': 0.28, 'delta_u_weight': 0.65, 'terminal_multiplier': 1.6}
+---
+objective: 12.585678
+tracking_cost: 12.227814
+control_cost: 0.049872
+slew_cost: 0.017518
+terminal_cost: 0.001349
+constraint_violation: 0.000578

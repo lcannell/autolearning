@@ -12,7 +12,6 @@ To set up a new experiment, work with the user to:
 3. **Read the in-scope files**: The repo is small. Read these files for context:
    - `README.md` — repository context.
    - `linear_mpc_problem.py` — the single benchmark file you modify.
-   - `program_linear_mpc.md` — these instructions.
 4. **Initialize results**: Ensure `results_linear_mpc.tsv` exists with just the header row if it is missing.
 5. **Confirm and go**: confirm the setup looks correct before starting the search loop.
 
@@ -46,7 +45,6 @@ a fixed set of scenarios and prints a scalar objective to minimize.
 **What you CANNOT do:**
 - Add dependencies.
 - Spread the benchmark across multiple files unless the user explicitly asks.
-- Turn it back into a neural network imitation problem.
 - Change the benchmark in ways that destroy comparability across runs.
 
 ## Goal
@@ -123,19 +121,19 @@ LOOP FOREVER:
 8. If `objective` improved, keep the commit.
 9. Otherwise reset back to the previous best commit.
 
-## Search strategy
+%## Search strategy
 
-Start with the exposed scalar knobs in `MPCParams`:
-- horizon
-- terminal multiplier
-- relative scaling between position and velocity weights
-- relative scaling between control effort and control variation
+%Start with the exposed scalar knobs in `MPCParams`:
+%- horizon
+%- terminal multiplier
+%- relative scaling between position and velocity weights
+%- relative scaling between control effort and control variation
 
-Then, if gains plateau, explore benchmark-preserving refinements inside
-`linear_mpc_problem.py`, such as:
-- scenario set composition
-- constraint penalty scale
-- rollout length
-- structure of the tracking cost
+%Then, if gains plateau, explore benchmark-preserving refinements inside
+%`linear_mpc_problem.py`, such as:
+%- scenario set composition
+%- constraint penalty scale
+%- rollout length
+%- structure of the tracking cost
 
-Keep changes interpretable. Prefer one-factor-at-a-time experiments early on.
+%Keep changes interpretable. Prefer one-factor-at-a-time experiments early on.
