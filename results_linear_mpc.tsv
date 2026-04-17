@@ -1,11 +1,2 @@
-commit	objective	status	description
-7df56b3	12.738057	keep	baseline default linear mpc benchmark
-61a75bf	14.469100	discard	longer horizon and stronger terminal weighting worsened objective
-2e7cd8c	12.889040	discard	more aggressive control tuning slightly worsened objective
-6008883	12.738057	keep	baseline after fixing objective to use fixed evaluation weights
-2f430af	12.864797	discard	longer horizon and stronger tracking weights worsened objective
-ef322a3	12.626654	keep	shorter horizon with smoother control improved objective
-8217d24	12.601354	keep	refined short-horizon smoother controller improved objective again
-ad95a7f	12.590832	keep	pushing to an even shorter smoother controller improved objective slightly
-d10df7a	12.584861	keep	ultra-short smoother controller improved objective again
-6c946ae	12.585678	discard	extreme short horizon slightly worsened objective
+commit	objective	eval_objective	status	description
+0f150ea	7.059855	7.562845	keep	baseline with deterministic Sobol search/eval splits

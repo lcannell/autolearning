@@ -1,7 +1,7 @@
-# autoresearch-linear-mpc
+# autoresearch-linear-mpc-3param
 
-This is an experiment to have the LLM do autonomous research on a direct linear
-MPC benchmark.
+This is an experiment to have the LLM do autonomous research on a simplified
+linear MPC benchmark with only 3 tunable controller hyperparameters.
 
 ## Setup
 
@@ -11,8 +11,8 @@ To set up a new experiment, work with the user to:
 2. **Create the branch**: `git checkout -b autoresearch/<tag>` from the current branch.
 3. **Read the in-scope files**: The repo is small. Read these files for context:
    - `README.md` — repository context.
-   - `linear_mpc_problem.py` — the single benchmark file you modify.
-4. **Initialize results**: Ensure `results_linear_mpc.tsv` exists with just the header row if it is missing.
+   - `linear_mpc_problem_3param.py` — the single benchmark file you modify.
+4. **Initialize results**: Ensure `results_linear_mpc_3param.tsv` exists with just the header row if it is missing.
 5. **Confirm and go**: confirm the setup looks correct before starting the search loop.
 
 Once setup is confirmed, start iterating.
@@ -23,7 +23,7 @@ Each experiment is a direct hyperparameter search over a deterministic linear
 MPC benchmark. Launch a run with:
 
 ```bash
-uv run linear_mpc_problem.py > run.log 2>&1
+uv run linear_mpc_problem_3param.py > run.log 2>&1
 ```
 
 The script evaluates a constrained linear tracking controller in closed loop on
@@ -31,14 +31,11 @@ a deterministic search split plus a larger deterministic evaluation split, and
 prints scalar objectives for both.
 
 **What you CAN do:**
-- Modify `linear_mpc_problem.py` only.
-- Tune the exposed MPC hyperparameters such as:
+- Modify `linear_mpc_problem_3param.py` only.
+- Tune the exposed MPC hyperparameters:
   - `horizon`
-  - `position_weight`
-  - `velocity_weight`
   - `control_weight`
   - `delta_u_weight`
-  - `terminal_multiplier`
 - Refine the benchmark internals only if it preserves the intended scope:
   deterministic linear MPC, constrained closed-loop evaluation, and a single
   scalar objective for comparison.
@@ -47,6 +44,7 @@ prints scalar objectives for both.
 - Add dependencies.
 - Spread the benchmark across multiple files unless the user explicitly asks.
 - Change the benchmark in ways that destroy comparability across runs.
+- Reintroduce the other 3 controller weights into the search space.
 
 ## Goal
 
@@ -81,8 +79,9 @@ essentially aligned.
 The script finishes with a block like:
 
 ```text
-Linear MPC benchmark
-params: {'horizon': 8, 'position_weight': 7.0, 'velocity_weight': 2.2, 'control_weight': 0.26, 'delta_u_weight': 0.6, 'terminal_multiplier': 1.8}
+Linear MPC benchmark (3 hyperparameters)
+params: {'horizon': 8, 'control_weight': 0.26, 'delta_u_weight': 0.6}
+fixed_design: position_weight=7.0, velocity_weight=2.2, terminal_multiplier=1.8
 scenario_config: search=32 seed=1234, eval=256 seed=5678
 ---
 objective: 7.059855
@@ -99,10 +98,10 @@ eval_terminal_cost: 0.006825
 eval_constraint_violation: 0.000969
 ```
 
-Extract the key metric with:
+Extract the key metrics with:
 
 ```bash
-grep "^objective:" run.log
+grep "^objective:\|^eval_objective:" run.log
 ```
 
 If needed, inspect all reported metrics with:
@@ -113,7 +112,7 @@ grep "^objective:\|^eval_objective:\|^search_.*:\|^eval_.*:" run.log
 
 ## Logging results
 
-Log each run to `results_linear_mpc.tsv` as tab-separated values:
+Log each run to `results_linear_mpc_3param.tsv` as tab-separated values:
 
 ```text
 commit	objective	eval_objective	status	description
@@ -125,35 +124,18 @@ commit	objective	eval_objective	status	description
 - `status`: `keep`, `discard`, or `crash`
 - `description`: short description of the attempted change
 
-Do not commit `results_linear_mpc.tsv`.
+Do not commit `results_linear_mpc_3param.tsv`.
 
 ## Experiment loop
 
 LOOP FOREVER:
 
 1. Check the current git state and identify the current best commit.
-2. Modify `linear_mpc_problem.py` with one clear idea.
+2. Modify `linear_mpc_problem_3param.py` with one clear idea.
 3. Commit the change.
-4. Run the benchmark: `uv run linear_mpc_problem.py > run.log 2>&1`
+4. Run the benchmark: `uv run linear_mpc_problem_3param.py > run.log 2>&1`
 5. Read both `objective` and `eval_objective` from the log.
 6. If the run crashes, inspect the tail of the log, decide whether to fix or discard.
-7. Record the result in `results_linear_mpc.tsv` without committing that TSV.
+7. Record the result in `results_linear_mpc_3param.tsv` without committing that TSV.
 8. Keep the commit if `objective` improved and `eval_objective` does not show a suspicious regression.
 9. Otherwise reset back to the previous best commit.
-
-%## Search strategy
-
-%Start with the exposed scalar knobs in `MPCParams`:
-%- horizon
-%- terminal multiplier
-%- relative scaling between position and velocity weights
-%- relative scaling between control effort and control variation
-
-%Then, if gains plateau, explore benchmark-preserving refinements inside
-%`linear_mpc_problem.py`, such as:
-%- scenario set composition
-%- constraint penalty scale
-%- rollout length
-%- structure of the tracking cost
-
-%Keep changes interpretable. Prefer one-factor-at-a-time experiments early on.

@@ -1,9 +1,16 @@
 Linear MPC benchmark
-params: {'horizon': 6, 'position_weight': 7.0, 'velocity_weight': 2.3, 'control_weight': 0.28, 'delta_u_weight': 0.65, 'terminal_multiplier': 1.6}
+params: {'horizon': 8, 'position_weight': 7.0, 'velocity_weight': 2.2, 'control_weight': 0.26, 'delta_u_weight': 0.6, 'terminal_multiplier': 1.8}
+scenario_config: search=32 seed=1234, eval=256 seed=5678
 ---
-objective: 12.585678
-tracking_cost: 12.227814
-control_cost: 0.049872
-slew_cost: 0.017518
-terminal_cost: 0.001349
-constraint_violation: 0.000578
+objective: 7.059855
+eval_objective: 7.562845
+search_tracking_cost: 6.645198
+search_control_cost: 0.033271
+search_slew_cost: 0.014400
+search_terminal_cost: 0.004820
+search_constraint_violation: 0.000724
+eval_tracking_cost: 7.018947
+eval_control_cost: 0.036424
+eval_slew_cost: 0.015991
+eval_terminal_cost: 0.006825
+eval_constraint_violation: 0.000969
