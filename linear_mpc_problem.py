@@ -75,12 +75,12 @@ B = torch.tensor([
 
 @dataclass
 class MPCParams:
-    horizon: int = 24
-    position_weight: float = 10.0
-    velocity_weight: float = 2.0
-    control_weight: float = 0.12
-    delta_u_weight: float = 0.25
-    terminal_multiplier: float = 3.5
+    horizon: int = 14
+    position_weight: float = 7.0
+    velocity_weight: float = 1.8
+    control_weight: float = 0.20
+    delta_u_weight: float = 0.45
+    terminal_multiplier: float = 2.0
 
 
 # ---------------------------------------------------------------------------
