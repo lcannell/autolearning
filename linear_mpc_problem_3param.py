@@ -6,9 +6,9 @@ constraints, scenario generation, and evaluation metric are kept explicit and
 deterministic, but the controller design space is intentionally reduced.
 
 Tunable hyperparameters:
-    - horizon
-    - control_weight
-    - delta_u_weight
+    - prediction_horizon
+    - control_horizon
+    - input_rate_weight
 
 Everything else is fixed to keep the search space easier to understand.
 
@@ -29,10 +29,10 @@ import torch
 
 DTYPE = torch.float64
 DT = 0.2
-STATE_DIM = 4
+PLANT_STATE_DIM = 4
 CONTROL_DIM = 1
 ROLLOUT_STEPS = 40
-SCENARIO_DIM = 4
+SCENARIO_DIM = PLANT_STATE_DIM
 SEARCH_NUM_SCENARIOS = 32
 EVAL_NUM_SCENARIOS = 256
 SEARCH_SCENARIO_SEED = 1234
@@ -77,15 +77,21 @@ B = torch.tensor([
 
 @dataclass
 class MPCParams:
-    horizon: int = 8
-    control_weight: float = 0.26
-    delta_u_weight: float = 0.60
+    prediction_horizon: int = 12
+    control_horizon: int = 4
+    input_rate_weight: float = 0.60
 
 
-# Fixed internal design weights. These are no longer part of the search space.
-DESIGN_POSITION_WEIGHT = 7.0
-DESIGN_VELOCITY_WEIGHT = 2.2
-DESIGN_TERMINAL_MULTIPLIER = 1.8
+# Fixed MPC design weights and bounds. Only the three parameters above are
+# tuned; everything else is kept fixed to mirror the formulation in the paper.
+OUTPUT_TRACKING_WEIGHT_MATRIX = torch.diag(torch.tensor([7.0, 2.2], dtype=DTYPE))
+INPUT_TRACKING_WEIGHT = 0.26
+INPUT_REFERENCE = 0.0
+CONTROL_INCREMENT_LIMIT = 0.35
+QP_RHO = 1.0
+QP_SIGMA = 1e-7
+QP_MAX_ITER = 100
+QP_ABS_TOL = 1e-7
 
 
 # ---------------------------------------------------------------------------
@@ -129,76 +135,339 @@ EVAL_SCENARIOS = build_scenarios(EVAL_NUM_SCENARIOS, EVAL_SCENARIO_SEED)
 
 
 def validate_params(params: MPCParams) -> None:
-    if params.horizon < 2:
-        raise ValueError("horizon must be >= 2")
-    if params.control_weight <= 0.0:
-        raise ValueError("control_weight must be > 0")
-    if params.delta_u_weight <= 0.0:
-        raise ValueError("delta_u_weight must be > 0")
+    if params.prediction_horizon < 2:
+        raise ValueError("prediction_horizon must be >= 2")
+    if params.control_horizon < 1:
+        raise ValueError("control_horizon must be >= 1")
+    if params.control_horizon > params.prediction_horizon:
+        raise ValueError("control_horizon must be <= prediction_horizon")
+    if params.input_rate_weight <= 0.0:
+        raise ValueError("input_rate_weight must be > 0")
 
 
-def make_augmented_system() -> tuple[torch.Tensor, torch.Tensor]:
-    a_aug = torch.zeros(STATE_DIM + CONTROL_DIM, STATE_DIM + CONTROL_DIM, dtype=DTYPE)
-    b_aug = torch.zeros(STATE_DIM + CONTROL_DIM, CONTROL_DIM, dtype=DTYPE)
-
-    a_aug[:STATE_DIM, :STATE_DIM] = A
-    a_aug[:STATE_DIM, STATE_DIM:] = B
-    a_aug[STATE_DIM:, STATE_DIM:] = torch.eye(CONTROL_DIM, dtype=DTYPE)
-
-    b_aug[:STATE_DIM, :] = B
-    b_aug[STATE_DIM:, :] = torch.eye(CONTROL_DIM, dtype=DTYPE)
-    return a_aug, b_aug
+def block_diag_repeat(block: torch.Tensor, repeats: int) -> torch.Tensor:
+    if repeats <= 0:
+        raise ValueError("repeats must be positive")
+    return torch.block_diag(*[block.clone() for _ in range(repeats)])
 
 
-def make_cost_matrices(params: MPCParams) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    q = torch.diag(torch.tensor([
-        DESIGN_POSITION_WEIGHT,
-        DESIGN_VELOCITY_WEIGHT,
-        0.0,
-        0.0,
-        params.delta_u_weight,
-    ], dtype=DTYPE))
-    r = torch.diag(torch.tensor([params.control_weight], dtype=DTYPE))
-    qf = DESIGN_TERMINAL_MULTIPLIER * q
-    return q, r, qf
+def build_state_prediction_matrices(
+    prediction_horizon: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    state_transition = torch.zeros(
+        prediction_horizon * PLANT_STATE_DIM,
+        PLANT_STATE_DIM,
+        dtype=DTYPE,
+    )
+    input_response = torch.zeros(
+        prediction_horizon * PLANT_STATE_DIM,
+        prediction_horizon * CONTROL_DIM,
+        dtype=DTYPE,
+    )
+
+    state_power = torch.eye(PLANT_STATE_DIM, dtype=DTYPE)
+    for step in range(prediction_horizon):
+        state_power = state_power @ A
+        row_slice = slice(step * PLANT_STATE_DIM, (step + 1) * PLANT_STATE_DIM)
+        state_transition[row_slice, :] = state_power
+
+        response_power = torch.eye(PLANT_STATE_DIM, dtype=DTYPE)
+        for input_step in range(step, -1, -1):
+            col_slice = slice(
+                input_step * CONTROL_DIM,
+                (input_step + 1) * CONTROL_DIM,
+            )
+            input_response[row_slice, col_slice] = response_power @ B
+            response_power = response_power @ A
+
+    return state_transition, input_response
 
 
-def finite_horizon_lqr_gain(
-    a: torch.Tensor,
-    b: torch.Tensor,
-    q: torch.Tensor,
-    r: torch.Tensor,
-    qf: torch.Tensor,
-    horizon: int,
-) -> list[torch.Tensor]:
-    p = qf.clone()
-    gains: list[torch.Tensor] = []
-    for _ in range(horizon):
-        gram = r + b.T @ p @ b
-        k = torch.linalg.solve(gram, b.T @ p @ a)
-        gains.append(k)
-        p = q + a.T @ p @ (a - b @ k)
-    gains.reverse()
-    return gains
+def build_control_lifting_matrix(
+    prediction_horizon: int,
+    control_horizon: int,
+) -> torch.Tensor:
+    lifting = torch.zeros(
+        prediction_horizon * CONTROL_DIM,
+        control_horizon * CONTROL_DIM,
+        dtype=DTYPE,
+    )
+    for step in range(prediction_horizon):
+        last_active_increment = min(step, control_horizon - 1)
+        for increment_index in range(last_active_increment + 1):
+            row_slice = slice(step * CONTROL_DIM, (step + 1) * CONTROL_DIM)
+            col_slice = slice(
+                increment_index * CONTROL_DIM,
+                (increment_index + 1) * CONTROL_DIM,
+            )
+            lifting[row_slice, col_slice] = torch.eye(CONTROL_DIM, dtype=DTYPE)
+    return lifting
 
 
-def make_tracking_error_state(x: torch.Tensor, previous_u: torch.Tensor) -> torch.Tensor:
-    error = torch.empty(STATE_DIM + CONTROL_DIM, dtype=DTYPE)
-    error[0] = x[0] - x[2]
-    error[1] = x[1] - x[3]
-    error[2] = 0.0
-    error[3] = 0.0
-    error[4] = previous_u
-    return error
+def compute_tracking_error(plant_state: torch.Tensor) -> torch.Tensor:
+    return torch.tensor(
+        [plant_state[0] - plant_state[2], plant_state[1] - plant_state[3]],
+        dtype=DTYPE,
+    )
 
 
-def clamp_state(x: torch.Tensor) -> tuple[torch.Tensor, float]:
-    raw_position_violation = torch.clamp(x[0].abs() - POSITION_LIMIT, min=0.0).item()
-    raw_velocity_violation = torch.clamp(x[1].abs() - VELOCITY_LIMIT, min=0.0).item()
-    x_next = x.clone()
-    x_next[0] = torch.clamp(x_next[0], -POSITION_LIMIT, POSITION_LIMIT)
-    x_next[1] = torch.clamp(x_next[1], -VELOCITY_LIMIT, VELOCITY_LIMIT)
-    return x_next, raw_position_violation + raw_velocity_violation
+def compute_constraint_violation(plant_state: torch.Tensor) -> float:
+    position_violation = torch.clamp(
+        plant_state[0].abs() - POSITION_LIMIT,
+        min=0.0,
+    ).item()
+    velocity_violation = torch.clamp(
+        plant_state[1].abs() - VELOCITY_LIMIT,
+        min=0.0,
+    ).item()
+    return position_violation + velocity_violation
+
+
+def compute_input_violation(control_command: torch.Tensor) -> float:
+    return torch.clamp(control_command.abs() - CONTROL_LIMIT, min=0.0).sum().item()
+
+
+def compute_input_rate_violation(control_increment: torch.Tensor) -> float:
+    return torch.clamp(
+        control_increment.abs() - CONTROL_INCREMENT_LIMIT,
+        min=0.0,
+    ).sum().item()
+
+
+class BoxConstrainedQPSolver:
+    """
+    Solve
+        min 0.5 x^T P x + q^T x
+        s.t. lower <= A x <= upper
+    with a small-scale ADMM scheme tailored to this benchmark.
+    """
+
+    def __init__(self, p_matrix: torch.Tensor, a_matrix: torch.Tensor) -> None:
+        self.p_matrix = p_matrix
+        self.a_matrix = a_matrix
+        regularizer = QP_SIGMA * torch.eye(p_matrix.size(0), dtype=DTYPE)
+        self.linear_system_matrix = (
+            p_matrix
+            + QP_RHO * (a_matrix.T @ a_matrix)
+            + regularizer
+        )
+        self.linear_system_cholesky = torch.linalg.cholesky(self.linear_system_matrix)
+        self.x = torch.zeros(p_matrix.size(0), dtype=DTYPE)
+        self.z = torch.zeros(a_matrix.size(0), dtype=DTYPE)
+        self.y = torch.zeros(a_matrix.size(0), dtype=DTYPE)
+
+    def reset(self) -> None:
+        self.x.zero_()
+        self.z.zero_()
+        self.y.zero_()
+
+    def solve(
+        self,
+        linear_term: torch.Tensor,
+        lower_bound: torch.Tensor,
+        upper_bound: torch.Tensor,
+    ) -> torch.Tensor:
+        x = self.x.clone()
+        z = self.z.clone()
+        y = self.y.clone()
+
+        for _ in range(QP_MAX_ITER):
+            rhs = -linear_term + QP_RHO * self.a_matrix.T @ (z - y)
+            x = torch.cholesky_solve(
+                rhs.unsqueeze(1),
+                self.linear_system_cholesky,
+            ).squeeze(1)
+
+            primal_argument = self.a_matrix @ x + y
+            z_next = torch.minimum(torch.maximum(primal_argument, lower_bound), upper_bound)
+            y = y + self.a_matrix @ x - z_next
+
+            primal_residual = torch.max(torch.abs(self.a_matrix @ x - z_next)).item()
+            dual_residual = torch.max(
+                torch.abs(QP_RHO * self.a_matrix.T @ (z_next - z))
+            ).item()
+            z = z_next
+
+            if primal_residual <= QP_ABS_TOL and dual_residual <= QP_ABS_TOL:
+                break
+
+        self.x = x
+        self.z = z
+        self.y = y
+        return x
+
+
+class RecedingHorizonController:
+    def __init__(self, params: MPCParams) -> None:
+        self.params = params
+        prediction_horizon = params.prediction_horizon
+        control_horizon = params.control_horizon
+
+        self.state_transition, self.input_response = build_state_prediction_matrices(
+            prediction_horizon,
+        )
+        self.control_lifting = build_control_lifting_matrix(
+            prediction_horizon,
+            control_horizon,
+        )
+
+        repeated_previous_control_map = torch.ones(
+            prediction_horizon * CONTROL_DIM,
+            CONTROL_DIM,
+            dtype=DTYPE,
+        )
+        self.repeated_previous_control_map = repeated_previous_control_map
+        self.input_map = self.control_lifting
+
+        tracking_output_matrix = torch.tensor([
+            [1.0, 0.0, -1.0, 0.0],
+            [0.0, 1.0, 0.0, -1.0],
+        ], dtype=DTYPE)
+        plant_output_matrix = torch.tensor([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+        ], dtype=DTYPE)
+
+        tracking_output_stack = block_diag_repeat(
+            tracking_output_matrix,
+            prediction_horizon,
+        )
+        plant_output_stack = block_diag_repeat(
+            plant_output_matrix,
+            prediction_horizon,
+        )
+
+        self.predicted_tracking_error_map = tracking_output_stack @ self.input_response @ self.input_map
+        self.predicted_tracking_error_state_map = tracking_output_stack @ self.state_transition
+        self.predicted_tracking_error_previous_input_map = (
+            tracking_output_stack @ self.input_response @ self.repeated_previous_control_map
+        )
+
+        self.predicted_output_map = plant_output_stack @ self.input_response @ self.input_map
+        self.predicted_output_state_map = plant_output_stack @ self.state_transition
+        self.predicted_output_previous_input_map = (
+            plant_output_stack @ self.input_response @ self.repeated_previous_control_map
+        )
+
+        self.output_tracking_weights = block_diag_repeat(
+            OUTPUT_TRACKING_WEIGHT_MATRIX,
+            prediction_horizon,
+        )
+        self.input_tracking_weights = INPUT_TRACKING_WEIGHT * torch.eye(
+            prediction_horizon * CONTROL_DIM,
+            dtype=DTYPE,
+        )
+        input_rate_weights = params.input_rate_weight * torch.eye(
+            control_horizon * CONTROL_DIM,
+            dtype=DTYPE,
+        )
+
+        quadratic_term = (
+            self.predicted_tracking_error_map.T
+            @ self.output_tracking_weights
+            @ self.predicted_tracking_error_map
+            + self.input_map.T @ self.input_tracking_weights @ self.input_map
+            + input_rate_weights
+        )
+        self.qp_hessian = 2.0 * quadratic_term
+
+        output_min = torch.tensor(
+            [-POSITION_LIMIT, -VELOCITY_LIMIT],
+            dtype=DTYPE,
+        ).repeat(prediction_horizon)
+        output_max = torch.tensor(
+            [POSITION_LIMIT, VELOCITY_LIMIT],
+            dtype=DTYPE,
+        ).repeat(prediction_horizon)
+        input_min = torch.full(
+            (prediction_horizon * CONTROL_DIM,),
+            -CONTROL_LIMIT,
+            dtype=DTYPE,
+        )
+        input_max = torch.full(
+            (prediction_horizon * CONTROL_DIM,),
+            CONTROL_LIMIT,
+            dtype=DTYPE,
+        )
+        input_rate_min = torch.full(
+            (control_horizon * CONTROL_DIM,),
+            -CONTROL_INCREMENT_LIMIT,
+            dtype=DTYPE,
+        )
+        input_rate_max = torch.full(
+            (control_horizon * CONTROL_DIM,),
+            CONTROL_INCREMENT_LIMIT,
+            dtype=DTYPE,
+        )
+
+        self.constraint_matrix = torch.cat([
+            self.predicted_output_map,
+            self.input_map,
+            torch.eye(control_horizon * CONTROL_DIM, dtype=DTYPE),
+        ], dim=0)
+        self.constraint_lower_template = torch.cat([
+            output_min,
+            input_min,
+            input_rate_min,
+        ])
+        self.constraint_upper_template = torch.cat([
+            output_max,
+            input_max,
+            input_rate_max,
+        ])
+        self.qp_solver = BoxConstrainedQPSolver(
+            self.qp_hessian,
+            self.constraint_matrix,
+        )
+
+    def compute_control(
+        self,
+        plant_state: torch.Tensor,
+        previous_control: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        free_tracking_error = (
+            self.predicted_tracking_error_state_map @ plant_state
+            + self.predicted_tracking_error_previous_input_map @ previous_control
+        )
+        free_input = self.repeated_previous_control_map @ previous_control
+        free_output = (
+            self.predicted_output_state_map @ plant_state
+            + self.predicted_output_previous_input_map @ previous_control
+        )
+
+        linear_term = 2.0 * (
+            self.predicted_tracking_error_map.T
+            @ self.output_tracking_weights
+            @ free_tracking_error
+            + self.input_map.T
+            @ self.input_tracking_weights
+            @ (free_input - INPUT_REFERENCE)
+        )
+
+        lower_bound = self.constraint_lower_template.clone()
+        upper_bound = self.constraint_upper_template.clone()
+
+        output_constraint_size = self.params.prediction_horizon * 2
+        input_constraint_size = self.params.prediction_horizon * CONTROL_DIM
+
+        lower_bound[:output_constraint_size] -= free_output
+        upper_bound[:output_constraint_size] -= free_output
+        lower_bound[
+            output_constraint_size:output_constraint_size + input_constraint_size
+        ] -= free_input
+        upper_bound[
+            output_constraint_size:output_constraint_size + input_constraint_size
+        ] -= free_input
+
+        optimal_increment_sequence = self.qp_solver.solve(
+            linear_term,
+            lower_bound,
+            upper_bound,
+        )
+        control_increment = optimal_increment_sequence[:CONTROL_DIM]
+        control_command = previous_control + control_increment
+        applied_control_increment = control_command - previous_control
+        return control_command, applied_control_increment
 
 
 def simulate_closed_loop(
@@ -206,41 +475,42 @@ def simulate_closed_loop(
     scenarios: torch.Tensor,
 ) -> dict[str, float]:
     validate_params(params)
-    a_aug, b_aug = make_augmented_system()
-    q, r, qf = make_cost_matrices(params)
-    gains = finite_horizon_lqr_gain(a_aug, b_aug, q, r, qf, params.horizon)
-    k0 = gains[0]
+    controller = RecedingHorizonController(params)
 
     total_tracking_cost = 0.0
     total_control_cost = 0.0
-    total_slew_cost = 0.0
+    total_input_rate_cost = 0.0
     total_constraint_violation = 0.0
     terminal_tracking_cost = 0.0
 
     for initial_state in scenarios:
-        x = initial_state.clone()
-        previous_u = torch.zeros(1, dtype=DTYPE)
+        plant_state = initial_state.clone()
+        previous_control = torch.zeros(1, dtype=DTYPE)
 
         for _ in range(ROLLOUT_STEPS):
-            error_state = make_tracking_error_state(x, previous_u)
-            delta_u = -(k0 @ error_state.unsqueeze(1)).squeeze(1)
-            u = torch.clamp(previous_u + delta_u, -CONTROL_LIMIT, CONTROL_LIMIT)
-            applied_delta_u = u - previous_u
-
-            tracking_error = torch.tensor([x[0] - x[2], x[1] - x[3]], dtype=DTYPE)
+            control_command, applied_control_increment = controller.compute_control(
+                plant_state,
+                previous_control,
+            )
+            tracking_error = compute_tracking_error(plant_state)
             total_tracking_cost += (
                 EVAL_POSITION_WEIGHT * tracking_error[0].pow(2).item()
                 + EVAL_VELOCITY_WEIGHT * tracking_error[1].pow(2).item()
             )
-            total_control_cost += EVAL_CONTROL_WEIGHT * u.pow(2).sum().item()
-            total_slew_cost += EVAL_DELTA_U_WEIGHT * applied_delta_u.pow(2).sum().item()
+            total_control_cost += EVAL_CONTROL_WEIGHT * control_command.pow(2).sum().item()
+            total_input_rate_cost += (
+                EVAL_DELTA_U_WEIGHT * applied_control_increment.pow(2).sum().item()
+            )
 
-            x = A @ x + B @ u
-            x, raw_violation = clamp_state(x)
-            total_constraint_violation += raw_violation
-            previous_u = u
+            plant_state = A @ plant_state + B @ control_command
+            total_constraint_violation += (
+                compute_constraint_violation(plant_state)
+                + compute_input_violation(control_command)
+                + compute_input_rate_violation(applied_control_increment)
+            )
+            previous_control = control_command
 
-        final_tracking_error = torch.tensor([x[0] - x[2], x[1] - x[3]], dtype=DTYPE)
+        final_tracking_error = compute_tracking_error(plant_state)
         terminal_tracking_cost += EVAL_TERMINAL_MULTIPLIER * (
             EVAL_POSITION_WEIGHT * final_tracking_error[0].pow(2).item()
             + EVAL_VELOCITY_WEIGHT * final_tracking_error[1].pow(2).item()
@@ -250,7 +520,7 @@ def simulate_closed_loop(
     objective = (
         total_tracking_cost
         + total_control_cost
-        + total_slew_cost
+        + total_input_rate_cost
         + terminal_tracking_cost
         + 500.0 * total_constraint_violation
     ) / normalizer
@@ -259,7 +529,7 @@ def simulate_closed_loop(
         "objective": objective,
         "tracking_cost": total_tracking_cost / normalizer,
         "control_cost": total_control_cost / normalizer,
-        "slew_cost": total_slew_cost / normalizer,
+        "slew_cost": total_input_rate_cost / normalizer,
         "terminal_cost": terminal_tracking_cost / normalizer,
         "constraint_violation": total_constraint_violation / normalizer,
     }
@@ -278,9 +548,9 @@ def main() -> None:
     print(f"params: {asdict(params)}")
     print(
         "fixed_design: "
-        f"position_weight={DESIGN_POSITION_WEIGHT}, "
-        f"velocity_weight={DESIGN_VELOCITY_WEIGHT}, "
-        f"terminal_multiplier={DESIGN_TERMINAL_MULTIPLIER}"
+        f"output_tracking_weights={OUTPUT_TRACKING_WEIGHT_MATRIX.diag().tolist()}, "
+        f"input_tracking_weight={INPUT_TRACKING_WEIGHT}, "
+        f"delta_u_limit={CONTROL_INCREMENT_LIMIT}"
     )
     print(
         "scenario_config: "
