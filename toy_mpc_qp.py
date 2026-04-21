@@ -14,8 +14,11 @@ At each sampling time we solve a finite-horizon QP with receding horizon:
 subject to:
     x_{k+1} = A x_k + B u_k
     y_k = C x_k
+    y_min <= y_k <= y_max
     u_min <= u_k <= u_max
     delta_u_min <= delta_u_k <= delta_u_max
+
+In this toy setup C = I, so the output constraints are bounds on position and velocity.
 
 The tunable MPC hyperparameters are intentionally few:
     - prediction_horizon
@@ -34,40 +37,42 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+import numpy as np
+import osqp
 import torch
+from scipy import sparse
 
 
 DTYPE = torch.float64
-DT = 0.2
-STATE_DIM = 2
-INPUT_DIM = 1
-OUTPUT_DIM = 2
+DT = 0.2   # tempo di campionamento del sistema
+STATE_DIM = 2    # dimensione dello stato: [posizione, velocità]
+INPUT_DIM = 1    # dimensione dell’ingresso di controllo u
+OUTPUT_DIM = 2   # dimensione dell’output osservato
 
-ROLLOUT_STEPS = 40
-SEARCH_NUM_SCENARIOS = 24
-EVAL_NUM_SCENARIOS = 96
+ROLLOUT_STEPS = 40    # numero di passi simulati per ogni scenario
+SEARCH_NUM_SCENARIOS = 24   # numero di scenari usati nella fase di train
+EVAL_NUM_SCENARIOS = 96     # numero di scenari usati nella valutazione finale
 SEARCH_SCENARIO_SEED = 1234
 EVAL_SCENARIO_SEED = 5678
 
-POSITION_LIMIT = 4.0
-VELOCITY_LIMIT = 3.0
-INPUT_LIMIT = 1.25
-INPUT_RATE_LIMIT = 0.50
+POSITION_LIMIT = 4.0   # bound sulla posizione
+VELOCITY_LIMIT = 3.0   # bound sulla velocità
+INPUT_LIMIT = 1.25     # bound sul controllo u
+INPUT_RATE_LIMIT = 0.50   # bound sulla variazione di controllo u 
 
-POSITION_INIT_LIMIT = 2.0
-VELOCITY_INIT_LIMIT = 1.0
-REFERENCE_POSITION_LIMIT = 2.5
+POSITION_INIT_LIMIT = 2.0   # bound per la posizione iniziale
+VELOCITY_INIT_LIMIT = 1.0   # bound per la velocità iniziale
+REFERENCE_POSITION_LIMIT = 2.5   # bound per la posizione di riferimento iniziale
 
-EVAL_POSITION_WEIGHT = 10.0
-EVAL_VELOCITY_WEIGHT = 1.0
-EVAL_INPUT_WEIGHT = 0.10
-EVAL_INPUT_RATE_WEIGHT = 0.25
-EVAL_CONSTRAINT_PENALTY = 200.0
+EVAL_POSITION_WEIGHT = 10.0    # peso dell’errore di posizione
+EVAL_VELOCITY_WEIGHT = 1.0     # peso dell’errore di velocità
+EVAL_INPUT_WEIGHT = 0.10       # peso del costo associato all’uso del controllo u
+EVAL_INPUT_RATE_WEIGHT = 0.25  # peso del costo associato alla variazione del controllo u
+EVAL_CONSTRAINT_PENALTY = 200.0   # penalità assegnata a eventuali violazioni dei vincoli
 
-QP_RHO = 1.0
-QP_SIGMA = 1e-8
-QP_MAX_ITER = 80
+QP_MAX_ITER = 4000
 QP_ABS_TOL = 1e-6
+QP_REL_TOL = 1e-6
 
 A = torch.tensor([
     [1.0, DT],
@@ -82,11 +87,11 @@ C = torch.eye(OUTPUT_DIM, dtype=DTYPE)
 
 @dataclass
 class MPCParams:
-    prediction_horizon: int = 12
-    control_horizon: int = 4
-    q_position: float = 8.0
-    q_velocity: float = 1.5
-    input_rate_weight: float = 0.6
+    prediction_horizon: int = 12   # orizzonte di predizione
+    control_horizon: int = 4    # orizzonte di controllo
+    q_position: float = 8.0     # peso sull’errore di posizione nel costo
+    q_velocity: float = 1.5     # peso sull’errore di velocità
+    input_rate_weight: float = 0.6    # peso su variazioni di controllo u
 
 
 @dataclass
@@ -191,24 +196,28 @@ def build_control_lifting_matrix(
 
 
 class BoxConstrainedQPSolver:
-    """
-    Solve:
-        min 0.5 x^T P x + q^T x
-        s.t. lower <= A x <= upper
-    using a small ADMM routine suitable for this toy problem.
-    """
+    """Solve `0.5 x^T P x + q^T x` with box-constrained linear inequalities via OSQP."""
 
     def __init__(self, p_matrix: torch.Tensor, a_matrix: torch.Tensor) -> None:
-        regularized_system = (
-            p_matrix
-            + QP_RHO * (a_matrix.T @ a_matrix)
-            + QP_SIGMA * torch.eye(p_matrix.size(0), dtype=DTYPE)
+        p_numpy = p_matrix.detach().cpu().numpy()
+        p_sparse = sparse.csc_matrix(0.5 * (p_numpy + p_numpy.T))
+        a_sparse = sparse.csc_matrix(a_matrix.detach().cpu().numpy())
+
+        self.problem = osqp.OSQP()
+        self.problem.setup(
+            P=p_sparse,
+            q=np.zeros(p_matrix.size(0), dtype=np.float64),
+            A=a_sparse,
+            l=np.full(a_matrix.size(0), -np.inf, dtype=np.float64),
+            u=np.full(a_matrix.size(0), np.inf, dtype=np.float64),
+            verbose=False,
+            warm_start=True,
+            polish=False,
+            max_iter=QP_MAX_ITER,
+            eps_abs=QP_ABS_TOL,
+            eps_rel=QP_REL_TOL,
         )
-        self.a_matrix = a_matrix
-        self.system_cholesky = torch.linalg.cholesky(regularized_system)
-        self.x = torch.zeros(p_matrix.size(0), dtype=DTYPE)
-        self.z = torch.zeros(a_matrix.size(0), dtype=DTYPE)
-        self.y = torch.zeros(a_matrix.size(0), dtype=DTYPE)
+        self.last_solution = np.zeros(p_matrix.size(0), dtype=np.float64)
 
     def solve(
         self,
@@ -216,31 +225,19 @@ class BoxConstrainedQPSolver:
         lower_bound: torch.Tensor,
         upper_bound: torch.Tensor,
     ) -> torch.Tensor:
-        x = self.x.clone()
-        z = self.z.clone()
-        y = self.y.clone()
+        q = linear_term.detach().cpu().numpy().astype(np.float64, copy=False)
+        l = lower_bound.detach().cpu().numpy().astype(np.float64, copy=False)
+        u = upper_bound.detach().cpu().numpy().astype(np.float64, copy=False)
 
-        for _ in range(QP_MAX_ITER):
-            rhs = -linear_term + QP_RHO * self.a_matrix.T @ (z - y)
-            x = torch.cholesky_solve(rhs.unsqueeze(1), self.system_cholesky).squeeze(1)
+        self.problem.update(q=q, l=l, u=u)
+        self.problem.warm_start(x=self.last_solution)
+        result = self.problem.solve()
 
-            projected = self.a_matrix @ x + y
-            z_next = torch.minimum(torch.maximum(projected, lower_bound), upper_bound)
-            y = y + self.a_matrix @ x - z_next
+        if result.x is None or result.info.status not in {"solved", "solved inaccurate"}:
+            raise RuntimeError(f"OSQP failed to solve the MPC QP: {result.info.status}")
 
-            primal_residual = torch.max(torch.abs(self.a_matrix @ x - z_next)).item()
-            dual_residual = torch.max(
-                torch.abs(QP_RHO * self.a_matrix.T @ (z_next - z))
-            ).item()
-            z = z_next
-
-            if primal_residual <= QP_ABS_TOL and dual_residual <= QP_ABS_TOL:
-                break
-
-        self.x = x
-        self.z = z
-        self.y = y
-        return x
+        self.last_solution = result.x.copy()
+        return torch.tensor(result.x, dtype=DTYPE)
 
 
 class ToyMPCController:
