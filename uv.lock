@@ -56,6 +56,8 @@ dependencies = [
     { name = "pyarrow" },
     { name = "requests" },
     { name = "rustbpe" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "tiktoken" },
     { name = "torch" },
 ]
@@ -70,6 +72,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=21.0.0" },
     { name = "requests", specifier = ">=2.32.0" },
     { name = "rustbpe", specifier = ">=0.1.0" },
+    { name = "scipy", specifier = ">=1.15.0" },
     { name = "tiktoken", specifier = ">=0.11.0" },
     { name = "torch", specifier = "==2.9.1", index = "https://download.pytorch.org/whl/cu128" },
 ]

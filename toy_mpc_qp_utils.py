@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 import numpy as np
 import osqp
@@ -34,27 +35,28 @@ QP_ABS_TOL = 1e-6
 QP_REL_TOL = 1e-6
 
 ROLL_OUT_STEPS_DEFAULT = 40
-NUM_SCENARIOS_DEFAULT = 24
-SCENARIO_SEED_DEFAULT = 1234
+NUM_SCENARIOS = 24
+SCENARIO_SEED = 1234
+
+CPU_DEVICE = torch.device("cpu")
 
 A = torch.tensor([
     [1.0, DT],
     [0.0, 1.0],
-], dtype=DTYPE)
+], dtype=DTYPE, device=CPU_DEVICE)
 B = torch.tensor([
     [0.5 * DT * DT],
     [DT],
-], dtype=DTYPE)
-C = torch.eye(OUTPUT_DIM, dtype=DTYPE)
+], dtype=DTYPE, device=CPU_DEVICE)
+C = torch.eye(OUTPUT_DIM, dtype=DTYPE, device=CPU_DEVICE)
 
 
-@dataclass
-class MPCParams:
-    prediction_horizon: int = 12
-    control_horizon: int = 4
-    q_position: float = 8.0
-    q_velocity: float = 1.5
-    input_rate_weight: float = 0.6
+class MPCParameterLike(Protocol):
+    prediction_horizon: int
+    control_horizon: int
+    q_position: float
+    q_velocity: float
+    input_rate_weight: float
 
 
 @dataclass
@@ -63,7 +65,22 @@ class Scenario:
     reference_position: float
 
 
-def validate_params(params: MPCParams) -> None:
+def resolve_device(device: str | torch.device | None = None) -> torch.device:
+    if device is None:
+        return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    resolved = torch.device(device)
+    if resolved.type == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError(f"Requested device '{resolved}', but CUDA is not available")
+        if resolved.index is not None and resolved.index >= torch.cuda.device_count():
+            raise RuntimeError(
+                f"Requested device '{resolved}', but only {torch.cuda.device_count()} CUDA device(s) are available"
+            )
+    return resolved
+
+
+def validate_params(params: MPCParameterLike) -> None:
     if params.prediction_horizon < 2:
         raise ValueError("prediction_horizon must be >= 2")
     if params.control_horizon < 1:
@@ -84,20 +101,27 @@ def block_diag_repeat(block: torch.Tensor, repeats: int) -> torch.Tensor:
     return torch.block_diag(*[block.clone() for _ in range(repeats)])
 
 
-def build_scenarios(num_scenarios: int, seed: int) -> list[Scenario]:
+def build_scenarios(
+    seed: int = SCENARIO_SEED,
+    num_scenarios: int = NUM_SCENARIOS,
+    device: str | torch.device | None = None,
+) -> list[Scenario]:
     if num_scenarios <= 0:
         raise ValueError("num_scenarios must be positive")
 
+    resolved_device = resolve_device(device)
     engine = torch.quasirandom.SobolEngine(dimension=3, scramble=True, seed=seed)
-    points = engine.draw(num_scenarios).to(dtype=DTYPE)
+    points = engine.draw(num_scenarios).to(dtype=DTYPE, device=resolved_device)
 
     lower = torch.tensor(
         [-POSITION_INIT_LIMIT, -VELOCITY_INIT_LIMIT, -REFERENCE_POSITION_LIMIT],
         dtype=DTYPE,
+        device=resolved_device,
     )
     upper = torch.tensor(
         [POSITION_INIT_LIMIT, VELOCITY_INIT_LIMIT, REFERENCE_POSITION_LIMIT],
         dtype=DTYPE,
+        device=resolved_device,
     )
     values = lower + (upper - lower) * points
 
@@ -112,26 +136,36 @@ def build_scenarios(num_scenarios: int, seed: int) -> list[Scenario]:
     return scenarios
 
 
-def build_state_prediction_matrices(prediction_horizon: int) -> tuple[torch.Tensor, torch.Tensor]:
+def build_state_prediction_matrices(
+    prediction_horizon: int,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
     state_transition = torch.zeros(
         prediction_horizon * STATE_DIM,
         STATE_DIM,
         dtype=DTYPE,
+        device=device,
     )
     input_response = torch.zeros(
         prediction_horizon * STATE_DIM,
         prediction_horizon * INPUT_DIM,
         dtype=DTYPE,
+        device=device,
     )
 
+    a_matrix = A.to(device=device)
+    b_matrix = B.to(device=device)
+
     for step in range(prediction_horizon):
-        state_power = torch.matrix_power(A, step + 1)
+        state_power = torch.matrix_power(a_matrix, step + 1)
         row_slice = slice(step * STATE_DIM, (step + 1) * STATE_DIM)
         state_transition[row_slice, :] = state_power
 
         for input_step in range(step + 1):
             col_slice = slice(input_step * INPUT_DIM, (input_step + 1) * INPUT_DIM)
-            input_response[row_slice, col_slice] = torch.matrix_power(A, step - input_step) @ B
+            input_response[row_slice, col_slice] = (
+                torch.matrix_power(a_matrix, step - input_step) @ b_matrix
+            )
 
     return state_transition, input_response
 
@@ -139,25 +173,28 @@ def build_state_prediction_matrices(prediction_horizon: int) -> tuple[torch.Tens
 def build_control_lifting_matrix(
     prediction_horizon: int,
     control_horizon: int,
+    device: torch.device,
 ) -> torch.Tensor:
     lifting = torch.zeros(
         prediction_horizon * INPUT_DIM,
         control_horizon * INPUT_DIM,
         dtype=DTYPE,
+        device=device,
     )
     for step in range(prediction_horizon):
         last_increment_index = min(step, control_horizon - 1)
         for increment_index in range(last_increment_index + 1):
             row_slice = slice(step * INPUT_DIM, (step + 1) * INPUT_DIM)
             col_slice = slice(increment_index * INPUT_DIM, (increment_index + 1) * INPUT_DIM)
-            lifting[row_slice, col_slice] = torch.eye(INPUT_DIM, dtype=DTYPE)
+            lifting[row_slice, col_slice] = torch.eye(INPUT_DIM, dtype=DTYPE, device=device)
     return lifting
 
 
 class BoxConstrainedQPSolver:
     """Solve `0.5 x^T P x + q^T x` with box-constrained linear inequalities via OSQP."""
 
-    def __init__(self, p_matrix: torch.Tensor, a_matrix: torch.Tensor) -> None:
+    def __init__(self, p_matrix: torch.Tensor, a_matrix: torch.Tensor, device: torch.device) -> None:
+        self.device = device
         p_numpy = p_matrix.detach().cpu().numpy()
         p_sparse = sparse.csc_matrix(0.5 * (p_numpy + p_numpy.T))
         a_sparse = sparse.csc_matrix(a_matrix.detach().cpu().numpy())
@@ -199,21 +236,30 @@ class BoxConstrainedQPSolver:
             raise RuntimeError(f"OSQP failed to solve the MPC QP: {result.info.status}")
 
         self.last_solution = result.x.copy()
-        return torch.tensor(result.x, dtype=DTYPE)
+        return torch.tensor(result.x, dtype=DTYPE, device=self.device)
 
 
 class ToyMPCController:
-    def __init__(self, params: MPCParams) -> None:
+    def __init__(self, params: MPCParameterLike, device: str | torch.device | None = None) -> None:
         self.params = params
+        self.device = resolve_device(device)
 
         n_pred = params.prediction_horizon
         n_ctrl = params.control_horizon
 
-        self.state_transition, self.input_response = build_state_prediction_matrices(n_pred)
-        self.control_lifting = build_control_lifting_matrix(n_pred, n_ctrl)
-        self.previous_input_map = torch.ones(n_pred * INPUT_DIM, INPUT_DIM, dtype=DTYPE)
+        self.state_transition, self.input_response = build_state_prediction_matrices(
+            n_pred,
+            self.device,
+        )
+        self.control_lifting = build_control_lifting_matrix(n_pred, n_ctrl, self.device)
+        self.previous_input_map = torch.ones(
+            n_pred * INPUT_DIM,
+            INPUT_DIM,
+            dtype=DTYPE,
+            device=self.device,
+        )
 
-        output_stack = block_diag_repeat(C, n_pred)
+        output_stack = block_diag_repeat(C.to(device=self.device), n_pred)
         self.predicted_output_map = output_stack @ self.input_response @ self.control_lifting
         self.predicted_output_state_map = output_stack @ self.state_transition
         self.predicted_output_previous_input_map = (
@@ -221,13 +267,20 @@ class ToyMPCController:
         )
 
         self.output_weights = block_diag_repeat(
-            torch.diag(torch.tensor([params.q_position, params.q_velocity], dtype=DTYPE)),
+            torch.diag(
+                torch.tensor(
+                    [params.q_position, params.q_velocity],
+                    dtype=DTYPE,
+                    device=self.device,
+                )
+            ),
             n_pred,
         )
-        self.input_weights = 0.15 * torch.eye(n_pred * INPUT_DIM, dtype=DTYPE)
+        self.input_weights = 0.15 * torch.eye(n_pred * INPUT_DIM, dtype=DTYPE, device=self.device)
         self.input_rate_weights = params.input_rate_weight * torch.eye(
             n_ctrl * INPUT_DIM,
             dtype=DTYPE,
+            device=self.device,
         )
 
         quadratic_term = (
@@ -240,34 +293,50 @@ class ToyMPCController:
         output_min = torch.tensor(
             [-POSITION_LIMIT, -VELOCITY_LIMIT],
             dtype=DTYPE,
+            device=self.device,
         ).repeat(n_pred)
         output_max = torch.tensor(
             [POSITION_LIMIT, VELOCITY_LIMIT],
             dtype=DTYPE,
+            device=self.device,
         ).repeat(n_pred)
-        input_min = torch.full((n_pred * INPUT_DIM,), -INPUT_LIMIT, dtype=DTYPE)
-        input_max = torch.full((n_pred * INPUT_DIM,), INPUT_LIMIT, dtype=DTYPE)
-        input_rate_min = torch.full((n_ctrl * INPUT_DIM,), -INPUT_RATE_LIMIT, dtype=DTYPE)
-        input_rate_max = torch.full((n_ctrl * INPUT_DIM,), INPUT_RATE_LIMIT, dtype=DTYPE)
+        input_min = torch.full((n_pred * INPUT_DIM,), -INPUT_LIMIT, dtype=DTYPE, device=self.device)
+        input_max = torch.full((n_pred * INPUT_DIM,), INPUT_LIMIT, dtype=DTYPE, device=self.device)
+        input_rate_min = torch.full(
+            (n_ctrl * INPUT_DIM,),
+            -INPUT_RATE_LIMIT,
+            dtype=DTYPE,
+            device=self.device,
+        )
+        input_rate_max = torch.full(
+            (n_ctrl * INPUT_DIM,),
+            INPUT_RATE_LIMIT,
+            dtype=DTYPE,
+            device=self.device,
+        )
 
         self.constraint_matrix = torch.cat(
             [
                 self.predicted_output_map,
                 self.control_lifting,
-                torch.eye(n_ctrl * INPUT_DIM, dtype=DTYPE),
+                torch.eye(n_ctrl * INPUT_DIM, dtype=DTYPE, device=self.device),
             ],
             dim=0,
         )
         self.constraint_lower_template = torch.cat([output_min, input_min, input_rate_min])
         self.constraint_upper_template = torch.cat([output_max, input_max, input_rate_max])
 
-        self.qp_solver = BoxConstrainedQPSolver(self.qp_hessian, self.constraint_matrix)
+        self.qp_solver = BoxConstrainedQPSolver(
+            self.qp_hessian,
+            self.constraint_matrix,
+            self.device,
+        )
 
     def reset(self) -> None:
         self.qp_solver.reset_warm_start()
 
     def _reference_trajectory(self, reference_position: float) -> torch.Tensor:
-        reference_output = torch.tensor([reference_position, 0.0], dtype=DTYPE)
+        reference_output = torch.tensor([reference_position, 0.0], dtype=DTYPE, device=self.device)
         return reference_output.repeat(self.params.prediction_horizon)
 
     def compute_control(
@@ -330,12 +399,16 @@ def compute_input_rate_violation(control_increment: torch.Tensor) -> float:
 
 
 def simulate_closed_loop(
-    params: MPCParams,
+    params: MPCParameterLike,
     scenarios: list[Scenario],
     rollout_steps: int = ROLL_OUT_STEPS_DEFAULT,
+    device: str | torch.device | None = None,
 ) -> dict[str, float]:
     validate_params(params)
-    controller = ToyMPCController(params)
+    resolved_device = resolve_device(device)
+    controller = ToyMPCController(params, resolved_device)
+    a_matrix = A.to(device=resolved_device)
+    b_matrix = B.to(device=resolved_device)
 
     total_tracking_cost = 0.0
     total_input_cost = 0.0
@@ -346,8 +419,8 @@ def simulate_closed_loop(
 
     for scenario in scenarios:
         controller.reset()
-        state = scenario.initial_state.clone()
-        previous_input = torch.zeros(INPUT_DIM, dtype=DTYPE)
+        state = scenario.initial_state.to(device=resolved_device).clone()
+        previous_input = torch.zeros(INPUT_DIM, dtype=DTYPE, device=resolved_device)
 
         for _ in range(rollout_steps):
             control_input, control_increment = controller.compute_control(
@@ -372,7 +445,7 @@ def simulate_closed_loop(
                 INPUT_RATE_WEIGHT * control_increment.pow(2).sum().item()
             )
 
-            state = A @ state + B @ control_input
+            state = a_matrix @ state + b_matrix @ control_input
             total_constraint_violation += (
                 compute_state_violation(state)
                 + compute_input_violation(control_input)
