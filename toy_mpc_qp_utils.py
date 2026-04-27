@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -20,23 +21,18 @@ VELOCITY_LIMIT = 3.0
 INPUT_LIMIT = 1.25
 INPUT_RATE_LIMIT = 0.50
 
-POSITION_INIT_LIMIT = 2.0
-VELOCITY_INIT_LIMIT = 1.0
-REFERENCE_POSITION_LIMIT = 2.5
+REFERENCE_POSITION = 1.0
+REFERENCE_VELOCITY = 0.0
 
-POSITION_WEIGHT = 10.0
-VELOCITY_WEIGHT = 1.0
-INPUT_WEIGHT = 0.10
-INPUT_RATE_WEIGHT = 0.25
-CONSTRAINT_PENALTY = 200.0
+RAISE_TIME_WEIGHT = 1.0
+SETTLING_TIME_WEIGHT = 1.0
+OVERSHOOT_EXP_SCALE = 30.0
 
 QP_MAX_ITER = 4000
 QP_ABS_TOL = 1e-6
 QP_REL_TOL = 1e-6
 
 ROLL_OUT_STEPS_DEFAULT = 40
-NUM_SCENARIOS = 24
-SCENARIO_SEED = 1234
 
 CPU_DEVICE = torch.device("cpu")
 
@@ -53,7 +49,6 @@ C = torch.eye(OUTPUT_DIM, dtype=DTYPE, device=CPU_DEVICE)
 
 class MPCParameterLike(Protocol):
     prediction_horizon: int
-    control_horizon: int
     q_position: float
     q_velocity: float
     input_rate_weight: float
@@ -63,6 +58,7 @@ class MPCParameterLike(Protocol):
 class Scenario:
     initial_state: torch.Tensor
     reference_position: float
+    reference_velocity: float
 
 
 def resolve_device(device: str | torch.device | None = None) -> torch.device:
@@ -83,10 +79,6 @@ def resolve_device(device: str | torch.device | None = None) -> torch.device:
 def validate_params(params: MPCParameterLike) -> None:
     if params.prediction_horizon < 2:
         raise ValueError("prediction_horizon must be >= 2")
-    if params.control_horizon < 1:
-        raise ValueError("control_horizon must be >= 1")
-    if params.control_horizon > params.prediction_horizon:
-        raise ValueError("control_horizon must be <= prediction_horizon")
     if params.q_position <= 0.0:
         raise ValueError("q_position must be > 0")
     if params.q_velocity <= 0.0:
@@ -101,39 +93,15 @@ def block_diag_repeat(block: torch.Tensor, repeats: int) -> torch.Tensor:
     return torch.block_diag(*[block.clone() for _ in range(repeats)])
 
 
-def build_scenarios(
-    seed: int = SCENARIO_SEED,
-    num_scenarios: int = NUM_SCENARIOS,
-    device: str | torch.device | None = None,
-) -> list[Scenario]:
-    if num_scenarios <= 0:
-        raise ValueError("num_scenarios must be positive")
-
+def build_scenarios(device: str | torch.device | None = None) -> list[Scenario]:
     resolved_device = resolve_device(device)
-    engine = torch.quasirandom.SobolEngine(dimension=3, scramble=True, seed=seed)
-    points = engine.draw(num_scenarios).to(dtype=DTYPE, device=resolved_device)
-
-    lower = torch.tensor(
-        [-POSITION_INIT_LIMIT, -VELOCITY_INIT_LIMIT, -REFERENCE_POSITION_LIMIT],
-        dtype=DTYPE,
-        device=resolved_device,
-    )
-    upper = torch.tensor(
-        [POSITION_INIT_LIMIT, VELOCITY_INIT_LIMIT, REFERENCE_POSITION_LIMIT],
-        dtype=DTYPE,
-        device=resolved_device,
-    )
-    values = lower + (upper - lower) * points
-
-    scenarios: list[Scenario] = []
-    for row in values:
-        scenarios.append(
-            Scenario(
-                initial_state=row[:2].clone(),
-                reference_position=float(row[2].item()),
-            )
+    return [
+        Scenario(
+            initial_state=torch.zeros(STATE_DIM, dtype=DTYPE, device=resolved_device),
+            reference_position=REFERENCE_POSITION,
+            reference_velocity=REFERENCE_VELOCITY,
         )
-    return scenarios
+    ]
 
 
 def build_state_prediction_matrices(
@@ -172,18 +140,16 @@ def build_state_prediction_matrices(
 
 def build_control_lifting_matrix(
     prediction_horizon: int,
-    control_horizon: int,
     device: torch.device,
 ) -> torch.Tensor:
     lifting = torch.zeros(
         prediction_horizon * INPUT_DIM,
-        control_horizon * INPUT_DIM,
+        prediction_horizon * INPUT_DIM,
         dtype=DTYPE,
         device=device,
     )
     for step in range(prediction_horizon):
-        last_increment_index = min(step, control_horizon - 1)
-        for increment_index in range(last_increment_index + 1):
+        for increment_index in range(step + 1):
             row_slice = slice(step * INPUT_DIM, (step + 1) * INPUT_DIM)
             col_slice = slice(increment_index * INPUT_DIM, (increment_index + 1) * INPUT_DIM)
             lifting[row_slice, col_slice] = torch.eye(INPUT_DIM, dtype=DTYPE, device=device)
@@ -245,13 +211,12 @@ class ToyMPCController:
         self.device = resolve_device(device)
 
         n_pred = params.prediction_horizon
-        n_ctrl = params.control_horizon
 
         self.state_transition, self.input_response = build_state_prediction_matrices(
             n_pred,
             self.device,
         )
-        self.control_lifting = build_control_lifting_matrix(n_pred, n_ctrl, self.device)
+        self.control_lifting = build_control_lifting_matrix(n_pred, self.device)
         self.previous_input_map = torch.ones(
             n_pred * INPUT_DIM,
             INPUT_DIM,
@@ -278,7 +243,7 @@ class ToyMPCController:
         )
         self.input_weights = 0.15 * torch.eye(n_pred * INPUT_DIM, dtype=DTYPE, device=self.device)
         self.input_rate_weights = params.input_rate_weight * torch.eye(
-            n_ctrl * INPUT_DIM,
+            n_pred * INPUT_DIM,
             dtype=DTYPE,
             device=self.device,
         )
@@ -303,13 +268,13 @@ class ToyMPCController:
         input_min = torch.full((n_pred * INPUT_DIM,), -INPUT_LIMIT, dtype=DTYPE, device=self.device)
         input_max = torch.full((n_pred * INPUT_DIM,), INPUT_LIMIT, dtype=DTYPE, device=self.device)
         input_rate_min = torch.full(
-            (n_ctrl * INPUT_DIM,),
+            (n_pred * INPUT_DIM,),
             -INPUT_RATE_LIMIT,
             dtype=DTYPE,
             device=self.device,
         )
         input_rate_max = torch.full(
-            (n_ctrl * INPUT_DIM,),
+            (n_pred * INPUT_DIM,),
             INPUT_RATE_LIMIT,
             dtype=DTYPE,
             device=self.device,
@@ -319,7 +284,7 @@ class ToyMPCController:
             [
                 self.predicted_output_map,
                 self.control_lifting,
-                torch.eye(n_ctrl * INPUT_DIM, dtype=DTYPE, device=self.device),
+                torch.eye(n_pred * INPUT_DIM, dtype=DTYPE, device=self.device),
             ],
             dim=0,
         )
@@ -335,8 +300,16 @@ class ToyMPCController:
     def reset(self) -> None:
         self.qp_solver.reset_warm_start()
 
-    def _reference_trajectory(self, reference_position: float) -> torch.Tensor:
-        reference_output = torch.tensor([reference_position, 0.0], dtype=DTYPE, device=self.device)
+    def _reference_trajectory(
+        self,
+        reference_position: float,
+        reference_velocity: float,
+    ) -> torch.Tensor:
+        reference_output = torch.tensor(
+            [reference_position, reference_velocity],
+            dtype=DTYPE,
+            device=self.device,
+        )
         return reference_output.repeat(self.params.prediction_horizon)
 
     def compute_control(
@@ -344,13 +317,17 @@ class ToyMPCController:
         current_state: torch.Tensor,
         previous_input: torch.Tensor,
         reference_position: float,
+        reference_velocity: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         free_output = (
             self.predicted_output_state_map @ current_state
             + self.predicted_output_previous_input_map @ previous_input
         )
         free_input = self.previous_input_map @ previous_input
-        reference_trajectory = self._reference_trajectory(reference_position)
+        reference_trajectory = self._reference_trajectory(
+            reference_position,
+            reference_velocity,
+        )
 
         linear_term = 2.0 * (
             self.predicted_output_map.T
@@ -384,20 +361,6 @@ class ToyMPCController:
         return control_input, control_increment
 
 
-def compute_state_violation(state: torch.Tensor) -> float:
-    position_violation = torch.clamp(state[0].abs() - POSITION_LIMIT, min=0.0).item()
-    velocity_violation = torch.clamp(state[1].abs() - VELOCITY_LIMIT, min=0.0).item()
-    return position_violation + velocity_violation
-
-
-def compute_input_violation(control_input: torch.Tensor) -> float:
-    return torch.clamp(control_input.abs() - INPUT_LIMIT, min=0.0).sum().item()
-
-
-def compute_input_rate_violation(control_increment: torch.Tensor) -> float:
-    return torch.clamp(control_increment.abs() - INPUT_RATE_LIMIT, min=0.0).sum().item()
-
-
 def simulate_closed_loop(
     params: MPCParameterLike,
     scenarios: list[Scenario],
@@ -405,68 +368,125 @@ def simulate_closed_loop(
     device: str | torch.device | None = None,
 ) -> dict[str, float]:
     validate_params(params)
+    total_raise_time = 0.0
+    total_settling_time = 0.0
+    total_overshoot_cost = 0.0
+
+    for scenario in scenarios:
+        trajectory = rollout_trajectory(
+            params,
+            scenario,
+            rollout_steps=rollout_steps,
+            device=device,
+        )
+        state_trajectory = trajectory["states"]
+        reference_state = torch.tensor(
+            [scenario.reference_position, scenario.reference_velocity],
+            dtype=DTYPE,
+        )
+        initial_state = state_trajectory[0]
+        target_delta = reference_state - initial_state
+        target_distance = torch.linalg.vector_norm(target_delta).item()
+
+        if target_distance <= 1e-9:
+            raise_time = 0.0
+            settling_radius = 0.0
+            overshoot_cost = 0.0
+        else:
+            direction = target_delta / target_distance
+            raise_time = float(rollout_steps)
+            for step, state in enumerate(state_trajectory[1:], start=1):
+                progress = torch.dot(state - initial_state, direction).item()
+                if progress >= 0.9 * target_distance:
+                    raise_time = float(step)
+                    break
+
+            settling_radius = 0.03 * target_distance
+            max_normalized_overshoot = 0.0
+            for state in state_trajectory:
+                progress = torch.dot(state - initial_state, direction).item()
+                normalized_progress = progress / target_distance
+                max_normalized_overshoot = max(max_normalized_overshoot, normalized_progress - 1.0)
+            overshoot_cost = math.exp(OVERSHOOT_EXP_SCALE * max_normalized_overshoot) - 1.0
+
+        settling_time = float(rollout_steps)
+        for step in range(len(state_trajectory)):
+            stays_settled = True
+            for future_state in state_trajectory[step:]:
+                tracking_error = torch.linalg.vector_norm(future_state - reference_state).item()
+                if tracking_error > settling_radius:
+                    stays_settled = False
+                    break
+            if stays_settled:
+                settling_time = float(step)
+                break
+
+        total_raise_time += raise_time
+        total_settling_time += settling_time
+        total_overshoot_cost += overshoot_cost
+
+    num_scenarios = float(len(scenarios))
+    average_raise_time = total_raise_time / num_scenarios
+    average_settling_time = total_settling_time / num_scenarios
+    average_overshoot_cost = total_overshoot_cost / num_scenarios
+    objective = (
+        RAISE_TIME_WEIGHT * average_raise_time
+        + average_overshoot_cost
+        + SETTLING_TIME_WEIGHT * average_settling_time
+    )
+
+    return {
+        "objective": objective,
+        "t_raise": average_raise_time,
+        "settling_time": average_settling_time,
+        "t_overshoot": average_overshoot_cost,
+    }
+
+
+def rollout_trajectory(
+    params: MPCParameterLike,
+    scenario: Scenario,
+    rollout_steps: int = ROLL_OUT_STEPS_DEFAULT,
+    device: str | torch.device | None = None,
+) -> dict[str, list[int] | list[float] | list[torch.Tensor]]:
+    validate_params(params)
     resolved_device = resolve_device(device)
     controller = ToyMPCController(params, resolved_device)
     a_matrix = A.to(device=resolved_device)
     b_matrix = B.to(device=resolved_device)
 
-    total_tracking_cost = 0.0
-    total_input_cost = 0.0
-    total_input_rate_cost = 0.0
-    total_constraint_violation = 0.0
-    squared_position_error_sum = 0.0
-    squared_velocity_error_sum = 0.0
+    controller.reset()
+    state = scenario.initial_state.to(device=resolved_device).clone()
+    previous_input = torch.zeros(INPUT_DIM, dtype=DTYPE, device=resolved_device)
 
-    for scenario in scenarios:
-        controller.reset()
-        state = scenario.initial_state.to(device=resolved_device).clone()
-        previous_input = torch.zeros(INPUT_DIM, dtype=DTYPE, device=resolved_device)
+    steps = list(range(rollout_steps + 1))
+    positions = [float(state[0].item())]
+    velocities = [float(state[1].item())]
+    reference_positions = [scenario.reference_position]
+    reference_velocities = [scenario.reference_velocity]
+    states = [state.detach().cpu().clone()]
 
-        for _ in range(rollout_steps):
-            control_input, control_increment = controller.compute_control(
-                state,
-                previous_input,
-                scenario.reference_position,
-            )
+    for _ in range(rollout_steps):
+        control_input, _ = controller.compute_control(
+            state,
+            previous_input,
+            scenario.reference_position,
+            scenario.reference_velocity,
+        )
+        state = a_matrix @ state + b_matrix @ control_input
+        previous_input = control_input
 
-            tracking_error = torch.tensor(
-                [state[0] - scenario.reference_position, state[1]],
-                dtype=DTYPE,
-            )
-            squared_position_error_sum += tracking_error[0].pow(2).item()
-            squared_velocity_error_sum += tracking_error[1].pow(2).item()
-
-            total_tracking_cost += (
-                POSITION_WEIGHT * tracking_error[0].pow(2).item()
-                + VELOCITY_WEIGHT * tracking_error[1].pow(2).item()
-            )
-            total_input_cost += INPUT_WEIGHT * control_input.pow(2).sum().item()
-            total_input_rate_cost += (
-                INPUT_RATE_WEIGHT * control_increment.pow(2).sum().item()
-            )
-
-            state = a_matrix @ state + b_matrix @ control_input
-            total_constraint_violation += (
-                compute_state_violation(state)
-                + compute_input_violation(control_input)
-                + compute_input_rate_violation(control_increment)
-            )
-            previous_input = control_input
-
-    num_samples = float(len(scenarios) * rollout_steps)
-    objective = (
-        total_tracking_cost
-        + total_input_cost
-        + total_input_rate_cost
-        + CONSTRAINT_PENALTY * total_constraint_violation
-    ) / num_samples
+        positions.append(float(state[0].item()))
+        velocities.append(float(state[1].item()))
+        reference_positions.append(scenario.reference_position)
+        reference_velocities.append(scenario.reference_velocity)
+        states.append(state.detach().cpu().clone())
 
     return {
-        "objective": objective,
-        "tracking_cost": total_tracking_cost / num_samples,
-        "input_cost": total_input_cost / num_samples,
-        "input_rate_cost": total_input_rate_cost / num_samples,
-        "constraint_violation": total_constraint_violation / num_samples,
-        "position_rmse": (squared_position_error_sum / num_samples) ** 0.5,
-        "velocity_rmse": (squared_velocity_error_sum / num_samples) ** 0.5,
+        "steps": steps,
+        "positions": positions,
+        "velocities": velocities,
+        "reference_positions": reference_positions,
+        "reference_velocities": reference_velocities,
+        "states": states,
     }

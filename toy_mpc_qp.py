@@ -15,16 +15,20 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 from toy_mpc_qp_utils import (
     INPUT_LIMIT,
     INPUT_RATE_LIMIT,
     POSITION_LIMIT,
-    SCENARIO_SEED,
     VELOCITY_LIMIT,
     build_scenarios,
-    NUM_SCENARIOS,
     resolve_device,
+    rollout_trajectory,
     simulate_closed_loop,
 )
 
@@ -32,7 +36,6 @@ from toy_mpc_qp_utils import (
 @dataclass
 class MPCParams:
     prediction_horizon: int = 12
-    control_horizon: int = 4
     q_position: float = 8.0
     q_velocity: float = 1.5
     input_rate_weight: float = 0.6
@@ -49,6 +52,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def save_tracking_plot(
+    steps: list[int],
+    positions: list[float],
+    reference_positions: list[float],
+    velocities: list[float],
+    reference_velocities: list[float],
+    output_path: Path,
+) -> None:
+    figure, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
+
+    axes[0].plot(steps, positions, label="position", linewidth=2.0)
+    axes[0].plot(steps, reference_positions, label="reference", linewidth=2.0, linestyle="--")
+    axes[0].set_ylabel("position")
+    axes[0].set_title("Closed-loop tracking")
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+
+    axes[1].plot(steps, velocities, label="velocity", linewidth=2.0)
+    axes[1].plot(steps, reference_velocities, label="reference", linewidth=2.0, linestyle="--")
+    axes[1].set_xlabel("step")
+    axes[1].set_ylabel("velocity")
+    axes[1].grid(True, alpha=0.3)
+    axes[1].legend()
+
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=150)
+    plt.close(figure)
+
+
 def main() -> None:
     args = parse_args()
     device = resolve_device(args.device)
@@ -56,6 +88,16 @@ def main() -> None:
     params = MPCParams()
     scenarios = build_scenarios(device=device)
     metrics = simulate_closed_loop(params, scenarios, device=device)
+    trajectory = rollout_trajectory(params, scenarios[0], device=device)
+    plot_path = Path("toy_mpc_qp_tracking.png")
+    save_tracking_plot(
+        trajectory["steps"],
+        trajectory["positions"],
+        trajectory["reference_positions"],
+        trajectory["velocities"],
+        trajectory["reference_velocities"],
+        plot_path,
+    )
 
     print("Toy MPC QP benchmark")
     print(f"device: {device}")
@@ -67,15 +109,13 @@ def main() -> None:
         f"input={INPUT_LIMIT}, "
         f"delta_u={INPUT_RATE_LIMIT}"
     )
-    print(f"scenario_config: num_scenarios={NUM_SCENARIOS} seed={SCENARIO_SEED}")
+    print(f"scenario_config: num_scenarios={len(scenarios)}")
     print("---")
     print(f"objective: {metrics['objective']:.6f}")
-    print(f"position_rmse: {metrics['position_rmse']:.6f}")
-    print(f"velocity_rmse: {metrics['velocity_rmse']:.6f}")
-    print(f"tracking_cost: {metrics['tracking_cost']:.6f}")
-    print(f"input_cost: {metrics['input_cost']:.6f}")
-    print(f"input_rate_cost: {metrics['input_rate_cost']:.6f}")
-    print(f"constraint_violation: {metrics['constraint_violation']:.6f}")
+    print(f"t_raise: {metrics['t_raise']:.6f}")
+    print(f"settling_time: {metrics['settling_time']:.6f}")
+    print(f"t_overshoot: {metrics['t_overshoot']:.6f}")
+    print(f"tracking_plot: {plot_path.resolve()}")
 
 
 if __name__ == "__main__":

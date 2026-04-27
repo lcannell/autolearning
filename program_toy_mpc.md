@@ -19,7 +19,7 @@ Once you get confirmation, kick off the experimentation.
 
 ## Experimentation
 
-Each experiment evaluates candidate MPC hyperparameters on a **fixed budget of 24 scenarios**. You launch it simply as: `uv run toy_mpc_qp.py`.
+Each experiment evaluates candidate MPC hyperparameters on a **fixed budget of 32 scenarios**. You launch it simply as: `uv run toy_mpc_qp.py`.
 
 **What you CAN do:**
 - Modify `toy_mpc_qp.py` — this is the only file you edit.
@@ -27,10 +27,10 @@ Each experiment evaluates candidate MPC hyperparameters on a **fixed budget of 2
 - Choose any search strategy you prefer: random search, local search, Bayesian optimization, swarm-based search, or another reasonable method.
 - Add useful per-attempt logging so each trial prints the most important metrics.
 
-**What you CANNOT do:**
+**What you CAN NOT do:**
 - Modify `toy_mpc_qp_utils.py`. It is read-only. It contains the fixed evaluation setup, scenario generation, and benchmark logic.
 - Install new packages or add dependencies. You can only use what's already in `pyproject.toml`.
-- Modify the evaluation harness. The `simulate_closed_loop` function in `toy_mpc_qp_utils.py` is the ground truth metric.
+- Modify the evaluation procedure. The `simulate_closed_loop` function in `toy_mpc_qp_utils.py` is the ground truth metric.
 
 **The goal is simple: get the lowest objective** You should modify `toy_mpc_qp.py` so it automatically explores the 5 hyperparameters and returns the best configuration it found.
 
