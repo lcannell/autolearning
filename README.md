@@ -16,10 +16,9 @@ By design, evaluation runs on a fixed set of scenarios. The main metric is **obj
 
 The purpose of `toy_mpc_qp.py` is to search over the hyperparameters in `MPCParams` and find a combination that minimizes the objective returned by the benchmark.
 
-The agent is free to choose the search strategy. For example, it can implement:
+The agent is free to choose the search strategy, but it must avoid for loops and grid searches that any human could simply implement. For example, it can implement:
 
 
-- local search
 - Bayesian optimization
 - population or swarm-based search
 - any hybrid strategy it judges useful

@@ -22,9 +22,9 @@ Each experiment evaluates candidate MPC hyperparameters on a **fixed budget of s
 **What you CAN do:**
 - Modify `toy_mpc_qp.py` — this is the only file you edit.
 - Add code that performs repeated attempts to find the best combination of the hyperparameters in `MPCParams`.
-- Choose any search strategy you prefer: local search, Bayesian optimization, swarm-based search, or another reasonable method.
+- Choose search strategy that an human could not simply implement: avoid for loops and simple grid searches.
 - Add useful per-attempt logging so each trial prints the most important metrics.
-- You CAN and you are invited to nstall new packages or add dependencies, BUT first ask to the user.
+- You CAN and you are invited to install new packages or add dependencies, BUT first ask to the user.
 
 
 **What you CAN NOT do:**
