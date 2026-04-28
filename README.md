@@ -1,6 +1,6 @@
 # autoresearch
 
-The idea is to give an AI agent a small but real MPC tuning problem and let it experiment autonomously. The agent edits `toy_mpc_qp.py`, tries different strategies to choose the best combination of the 5 MPC hyperparameters, runs the benchmark on a fixed set of scenarios, checks whether the objective improved, and keeps iterating. The human does not manually tune the controller in code; instead, the human edits `program_toy_mpc.md` to define the agent's operating instructions and research style.
+The idea is to give an AI agent a small but real MPC tuning problem and let it experiment autonomously. The agent edits `toy_mpc_qp.py`, tries different strategies to choose the best combination of the MPC hyperparameters, runs the benchmark on a fixed set of scenarios, checks whether the objective improved, and keeps iterating. The human does not manually tune the controller in code; instead, the human edits `program_toy_mpc.md` to define the agent's operating instructions and research style.
 
 ## How it works
 
@@ -10,15 +10,15 @@ The repo is deliberately kept small and only really has three files that matter:
 - **`toy_mpc_qp.py`** — the single file the agent edits. It should contain the hyperparameter search logic. **This file is edited and iterated on by the agent**.
 - **`program_toy_mpc.md`** — baseline instructions for one agent. Point your agent here and let it go. **This file is edited and iterated on by the human**.
 
-By design, evaluation runs on a fixed set of **24 scenarios**. The main metric is **objective** — lower is better.
+By design, evaluation runs on a fixed set of scenarios. The main metric is **objective** — lower is better.
 
 ## What The Agent Should Do
 
-The purpose of `toy_mpc_qp.py` is to search over the 5 hyperparameters in `MPCParams` and find a combination that minimizes the objective returned by the benchmark.
+The purpose of `toy_mpc_qp.py` is to search over the hyperparameters in `MPCParams` and find a combination that minimizes the objective returned by the benchmark.
 
 The agent is free to choose the search strategy. For example, it can implement:
 
-- random search
+
 - local search
 - Bayesian optimization
 - population or swarm-based search
@@ -30,7 +30,7 @@ For each attempt, the script should print a compact log with the most important 
 
 - which hyperparameters were tried
 - what objective was obtained
-- the main component metrics such as tracking cost, input cost, input-rate cost, and constraint violation
+- the values of the terms inside the objective
 - whether this attempt is the best one so far
 
 At the end of the run, the script should print the best hyperparameter configuration found and its associated benchmark metrics.
@@ -67,7 +67,7 @@ The `program_toy_mpc.md` file is essentially a super lightweight "skill".
 ## Project structure
 
 ```
-toy_mpc_qp_utils.py      — constants, data prep + runtime utilities (do not modify)
+toy_mpc_qp_utils.py      — constants, data prep, objective computation, + runtime utilities (do not modify)
 toy_mpc_qp.py            — hyperparameter search loop (agent modifies this)
 program_toy_mpc.md      — agent instructions
 pyproject.toml  — dependencies
@@ -76,7 +76,7 @@ pyproject.toml  — dependencies
 ## Design choices
 
 - **Single file to modify.** The agent only touches `toy_mpc_qp.py`. This keeps the scope manageable and diffs reviewable.
-- **Fixed evaluation budget.** The benchmark always runs over the same 24 scenarios. This keeps experiments directly comparable across different search strategies.
-- **Search method is flexible.** The agent is allowed to choose whatever search method it prefers for the 5 MPC hyperparameters, as long as it improves the objective.
+- **Fixed evaluation budget.** The benchmark always runs over the same scenarios, decided before starting the tuning. This keeps experiments directly comparable across different search strategies.
+- **Search method is flexible.** The agent is allowed to choose whatever search method it prefers for the MPC hyperparameters, as long as it improves the objective.
 - **Per-attempt visibility.** Every attempted hyperparameter configuration should be logged with the key metrics so that progress is inspectable and reproducible.
 - **Self-contained.** No distributed setup, no complex config system. One benchmark, one file to iterate on, one main metric to optimize.
