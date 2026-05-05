@@ -97,7 +97,7 @@ def build_scenarios(device: str | torch.device | None = None) -> list[Scenario]:
     resolved_device = resolve_device(device)
     return [
         Scenario(
-            initial_state=torch.zeros(STATE_DIM, dtype=DTYPE, device=resolved_device),
+            initial_state=torch.tensor([0.0, 1.0], dtype=DTYPE, device=resolved_device),
             reference_position=REFERENCE_POSITION,
             reference_velocity=REFERENCE_VELOCITY,
         )

@@ -57,7 +57,7 @@ If the above commands all work ok, your setup is working and you can go into aut
 Simply spin up your Claude/Codex or whatever you want in this repo (and disable all permissions), then you can prompt something like:
 
 ```
-Read program_toy_mpc.md and turn toy_mpc_qp.py into a hyperparameter search loop that finds a better set of MPCParams and logs the important metrics for every attempt.
+Read program_toy_mpc_learning.md and turn toy_mpc_qp.py into a hyperparameter search exploration that finds a better set of MPCParams and logs the important metrics for every attempt.
 ```
 
 The `program_toy_mpc.md` file is essentially a super lightweight "skill".
