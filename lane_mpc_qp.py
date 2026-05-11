@@ -44,10 +44,10 @@ from lane_mpc_qp_utils import (
 
 @dataclass
 class MPCParams:
-    prediction_horizon: int = 18
-    control_horizon_fraction: float = 0.62
-    q_delta_u_v: float = 0.031
-    q_delta_u_psi: float = 2.75
+    prediction_horizon: int = 24
+    control_horizon_fraction: float = 0.35
+    q_delta_u_v: float = 0.10025884372280375
+    q_delta_u_psi: float = 0.016572675401761255
 
 
 def save_tracking_plot(trajectory: dict[str, list], output_path: Path) -> None:
