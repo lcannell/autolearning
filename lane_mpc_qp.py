@@ -44,8 +44,8 @@ from lane_mpc_qp_utils import (
 
 @dataclass
 class MPCParams:
-    prediction_horizon: int = 19
-    control_horizon_fraction: float = 0.37
+    prediction_horizon: int = 18
+    control_horizon_fraction: float = 0.39
     q_delta_u_v: float = 0.10025884372280375
     q_delta_u_psi: float = 10.0
 
