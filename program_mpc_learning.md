@@ -29,3 +29,12 @@ commit	objective	status	description	notes
 5. Optional notes, such as the reasoning behind the choice of the values
 
 The first thing you must do is to run a benchmark by selecting 4 random values for the hyperparameters, then you start the black-box search
+
+# More details
+DO NOT run grid/random searches!
+
+What you need to do is:
+
+- test one combination of the 4 parameters;
+- inspect the result, i.e. the objective value and the terms that compose it;
+- reason about the obtained numbers and, based on that, decide the next parameter combination to test;
