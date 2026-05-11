@@ -47,7 +47,7 @@ class MPCParams:
     prediction_horizon: int = 21
     control_horizon_fraction: float = 0.31
     q_delta_u_v: float = 0.10025884372280375
-    q_delta_u_psi: float = 0.03
+    q_delta_u_psi: float = 0.08
 
 
 def save_tracking_plot(trajectory: dict[str, list], output_path: Path) -> None:
