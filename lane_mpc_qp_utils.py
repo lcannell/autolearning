@@ -101,8 +101,8 @@ def build_scenarios() -> list[Scenario]:
             initial_input=np.array([REFERENCE_SPEED, REFERENCE_STEERING], dtype=np.float64),
             reference_lane_w=LANE_2_W,
             obstacles=(
-                ObstacleVehicle(initial_x=10.0, lane_w=LANE_1_W, speed=38.0 / 3.6),
-                ObstacleVehicle(initial_x=33.0, lane_w=LANE_2_W, speed=40.0 / 3.6),
+                ObstacleVehicle(initial_x=6.0, lane_w=LANE_1_W, speed=38.0 / 3.6),
+                ObstacleVehicle(initial_x=27.0, lane_w=LANE_2_W, speed=40.0 / 3.6),
             ),
         )
     ]
