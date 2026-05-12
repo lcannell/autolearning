@@ -1,0 +1,67 @@
+commit	objective	status	description	notes
+0ac47d	18.567566	keep	random benchmark	n=18 ctrl=0.62 qv=0.031 qpsi=2.75 terms raise=7 settle=11 overshoot=0.567566
+eeade1d	19.639992	discard	faster steering with longer horizon	n=26 ctrl=0.55 qv=0.025 qpsi=0.045 terms raise=7 settle=12 overshoot=0.639992
+7669b5a	17.091161	keep	compare original lane mpc params	n=24 ctrl=0.35 qv=0.1002588437 qpsi=0.0165726754 terms raise=7 settle=10 overshoot=0.091161
+20febfd	17.091163	discard	lower steering rate penalty	n=24 ctrl=0.35 qv=0.1002588437 qpsi=0.0068 terms raise=7 settle=10 overshoot=0.091163
+c8ae31c	17.092724	discard	lower speed rate penalty	n=24 ctrl=0.35 qv=0.0068 qpsi=0.0165726754 terms raise=7 settle=10 overshoot=0.092724
+81a14d5	18.532664	discard	increase control horizon freedom	n=24 ctrl=0.45 qv=0.1002588437 qpsi=0.0165726754 terms raise=7 settle=11 overshoot=0.532664
+42a377e	17.000809	keep	reduce control horizon freedom	n=24 ctrl=0.25 qv=0.1002588437 qpsi=0.0165726754 terms raise=8 settle=9 overshoot=0.000809
+09f4f88	17.024964	discard	try intermediate control horizon	n=24 ctrl=0.29 qv=0.1002588437 qpsi=0.0165726754 terms raise=8 settle=9 overshoot=0.024964
+0edd3ca	17.000739	keep	shorten prediction with compact control	n=20 ctrl=0.30 qv=0.1002588437 qpsi=0.0165726754 terms raise=8 settle=9 overshoot=0.000739
+62bd116	17.010440	discard	try shorter compact prediction	n=18 ctrl=0.33 qv=0.1002588437 qpsi=0.0165726754 terms raise=8 settle=9 overshoot=0.010440
+2bbb9cf	17.000087	keep	try slightly longer compact prediction	n=22 ctrl=0.27 qv=0.1002588437 qpsi=0.0165726754 terms raise=8 settle=9 overshoot=0.000087
+25900d6	17.000114	discard	fine tune compact prediction horizon	n=23 ctrl=0.26 qv=0.1002588437 qpsi=0.0165726754 terms raise=8 settle=9 overshoot=0.000114
+5c92309	17.000078	keep	try neighboring compact horizon	n=21 ctrl=0.29 qv=0.1002588437 qpsi=0.0165726754 terms raise=8 settle=9 overshoot=0.000078
+540dbf4	17.000079	discard	raise steering smoothness near compact best	n=21 ctrl=0.29 qv=0.1002588437 qpsi=0.03 terms raise=8 settle=9 overshoot=0.000079
+2d3b347	17.000078	discard	lower steering smoothness near compact best	n=21 ctrl=0.29 qv=0.1002588437 qpsi=0.012 terms raise=8 settle=9 overshoot=0.000078
+380d4a0	17.000078	discard	raise speed smoothness near compact best	n=21 ctrl=0.29 qv=0.20 qpsi=0.0165726754 terms raise=8 settle=9 overshoot=0.000078
+a9af25e	16.047578	keep	add one control move near best	n=21 ctrl=0.31 qv=0.1002588437 qpsi=0.0165726754 terms raise=8 settle=8 overshoot=0.047578
+4db82f9	16.047512	keep	smooth steering on faster settling setup	n=21 ctrl=0.31 qv=0.1002588437 qpsi=0.03 terms raise=8 settle=8 overshoot=0.047512
+567ce02	16.047266	keep	increase steering smoothness on fast setup	n=21 ctrl=0.31 qv=0.1002588437 qpsi=0.08 terms raise=8 settle=8 overshoot=0.047266
+450f52d	16.046643	keep	further increase steering smoothness	n=21 ctrl=0.31 qv=0.1002588437 qpsi=0.20 terms raise=8 settle=8 overshoot=0.046643
+e9befbb	16.044263	keep	probe high steering smoothness	n=21 ctrl=0.31 qv=0.1002588437 qpsi=0.70 terms raise=8 settle=8 overshoot=0.044263
+3839896	16.038164	keep	try very high steering smoothness	n=21 ctrl=0.31 qv=0.1002588437 qpsi=2.0 terms raise=8 settle=8 overshoot=0.038164
+8d55d9e	16.023141	keep	push steering smoothness higher	n=21 ctrl=0.31 qv=0.1002588437 qpsi=5.0 terms raise=8 settle=8 overshoot=0.023141
+2914f13	16.020740	keep	test strong steering smoothness	n=21 ctrl=0.31 qv=0.1002588437 qpsi=10.0 terms raise=8 settle=8 overshoot=0.020740
+93d786e	17.023003	discard	probe max steering smoothness	n=21 ctrl=0.31 qv=0.1002588437 qpsi=20.0 terms raise=8 settle=9 overshoot=0.023003
+a4b0dfd	16.020954	discard	tune high steering smoothness	n=21 ctrl=0.31 qv=0.1002588437 qpsi=14.0 terms raise=8 settle=8 overshoot=0.020954
+67aaa2b	16.020787	discard	nudge steering smoothness above best	n=21 ctrl=0.31 qv=0.1002588437 qpsi=11.0 terms raise=8 settle=8 overshoot=0.020787
+39cdca7	16.020858	discard	nudge steering smoothness below best	n=21 ctrl=0.31 qv=0.1002588437 qpsi=9.0 terms raise=8 settle=8 overshoot=0.020858
+2c240e9	16.020937	discard	raise speed smoothness on high steering setup	n=21 ctrl=0.31 qv=0.20 qpsi=10.0 terms raise=8 settle=8 overshoot=0.020937
+50115e2	16.020756	discard	lower speed smoothness on high steering setup	n=21 ctrl=0.31 qv=0.05 qpsi=10.0 terms raise=8 settle=8 overshoot=0.020756
+024c438	16.020998	discard	slightly raise speed smoothness	n=21 ctrl=0.31 qv=0.12 qpsi=10.0 terms raise=8 settle=8 overshoot=0.020998
+80ec5bf	17.022134	discard	try longer horizon with seven controls	n=22 ctrl=0.32 qv=0.1002588437 qpsi=10.0 terms raise=8 settle=9 overshoot=0.022134
+9830fc8	16.019012	keep	try shorter horizon with seven controls	n=20 ctrl=0.35 qv=0.1002588437 qpsi=10.0 terms raise=8 settle=8 overshoot=0.019012
+f4c9cf6	16.017137	keep	try even shorter seven-control horizon	n=19 ctrl=0.37 qv=0.1002588437 qpsi=10.0 terms raise=8 settle=8 overshoot=0.017137
+54be333	16.014912	keep	try eighteen-step seven-control horizon	n=18 ctrl=0.39 qv=0.1002588437 qpsi=10.0 terms raise=8 settle=8 overshoot=0.014912
+90b9b64	16.012886	keep	try seventeen-step seven-control horizon	n=17 ctrl=0.41 qv=0.1002588437 qpsi=10.0 terms raise=8 settle=8 overshoot=0.012886
+9b891a4	16.011026	keep	try sixteen-step seven-control horizon	n=16 ctrl=0.44 qv=0.1002588437 qpsi=10.0 terms raise=8 settle=8 overshoot=0.011026
+dee0a23	16.010923	keep	try fifteen-step seven-control horizon	n=15 ctrl=0.47 qv=0.1002588437 qpsi=10.0 terms raise=8 settle=8 overshoot=0.010923
+34cf9a4	16.010838	keep	try fourteen-step seven-control horizon	n=14 ctrl=0.50 qv=0.1002588437 qpsi=10.0 terms raise=8 settle=8 overshoot=0.010838
+d0fc86e	15.014329	keep	try thirteen-step seven-control horizon	n=13 ctrl=0.54 qv=0.1002588437 qpsi=10.0 terms raise=7 settle=8 overshoot=0.014329
+0abafb2	17.138597	discard	try twelve-step seven-control horizon	n=12 ctrl=0.58 qv=0.1002588437 qpsi=10.0 terms raise=7 settle=10 overshoot=0.138597
+8e9cb5c	15.016801	discard	raise steering smoothness at thirteen horizon	n=13 ctrl=0.54 qv=0.1002588437 qpsi=12.0 terms raise=7 settle=8 overshoot=0.016801
+12b0e62	15.013631	keep	lower steering smoothness at thirteen horizon	n=13 ctrl=0.54 qv=0.1002588437 qpsi=8.0 terms raise=7 settle=8 overshoot=0.013631
+3d5e9a2	15.013969	discard	probe lower steering smoothness at thirteen	n=13 ctrl=0.54 qv=0.1002588437 qpsi=6.0 terms raise=7 settle=8 overshoot=0.013969
+4399abf	15.013550	keep	fine tune steering smoothness at thirteen	n=13 ctrl=0.54 qv=0.1002588437 qpsi=8.5 terms raise=7 settle=8 overshoot=0.013550
+c044567	15.013478	keep	nudge steering smoothness toward nine	n=13 ctrl=0.54 qv=0.1002588437 qpsi=9.0 terms raise=7 settle=8 overshoot=0.013478
+e40314e	15.013669	discard	nudge steering smoothness toward ten	n=13 ctrl=0.54 qv=0.1002588437 qpsi=9.5 terms raise=7 settle=8 overshoot=0.013669
+f54e34b	15.013435	keep	fine tune steering smoothness above nine	n=13 ctrl=0.54 qv=0.1002588437 qpsi=9.25 terms raise=7 settle=8 overshoot=0.013435
+b99596f	15.013468	discard	probe steering smoothness upper shoulder	n=13 ctrl=0.54 qv=0.1002588437 qpsi=9.35 terms raise=7 settle=8 overshoot=0.013468
+bc54d1f	15.013453	discard	probe steering smoothness lower shoulder	n=13 ctrl=0.54 qv=0.1002588437 qpsi=9.15 terms raise=7 settle=8 overshoot=0.013453
+4ea5c59	15.063630	discard	try eight controls at thirteen horizon	n=13 ctrl=0.62 qv=0.1002588437 qpsi=9.25 terms raise=7 settle=8 overshoot=0.063630
+a06fa81	16.006251	discard	try six controls at thirteen horizon	n=13 ctrl=0.46 qv=0.1002588437 qpsi=9.25 terms raise=8 settle=8 overshoot=0.006251
+c256abd	15.013283	keep	lower speed smoothness at thirteen best	n=13 ctrl=0.54 qv=0.05 qpsi=9.25 terms raise=7 settle=8 overshoot=0.013283
+6306555	15.013256	keep	probe lower speed smoothness at best	n=13 ctrl=0.54 qv=0.02 qpsi=9.25 terms raise=7 settle=8 overshoot=0.013256
+46ff9d1	15.013247	keep	test minimum speed smoothness at best	n=13 ctrl=0.54 qv=0.0068 qpsi=9.25 terms raise=7 settle=8 overshoot=0.013247
+df9d1a6	15.012909	keep	retune steering with minimum speed smoothness	n=13 ctrl=0.54 qv=0.0068 qpsi=9.0 terms raise=7 settle=8 overshoot=0.012909
+750c5a6	15.012882	keep	lower steering with minimum speed smoothness	n=13 ctrl=0.54 qv=0.0068 qpsi=8.5 terms raise=7 settle=8 overshoot=0.012882
+bc83cf2	15.012965	discard	probe lower steering with minimum speed	n=13 ctrl=0.54 qv=0.0068 qpsi=8.0 terms raise=7 settle=8 overshoot=0.012965
+00196f8	15.012858	keep	fine tune steering with minimum speed	n=13 ctrl=0.54 qv=0.0068 qpsi=8.65 terms raise=7 settle=8 overshoot=0.012858
+f6e5335	15.012834	keep	nudge steering upward with minimum speed	n=13 ctrl=0.54 qv=0.0068 qpsi=8.8 terms raise=7 settle=8 overshoot=0.012834
+45b4864	15.012836	discard	probe steering near nine with minimum speed	n=13 ctrl=0.54 qv=0.0068 qpsi=8.9 terms raise=7 settle=8 overshoot=0.012836
+1c38aea	15.012842	discard	probe steering lower side with minimum speed	n=13 ctrl=0.54 qv=0.0068 qpsi=8.75 terms raise=7 settle=8 overshoot=0.012842
+f2c84fd	18.365574	discard	test minimum horizon with seven controls	n=10 ctrl=0.70 qv=0.0068 qpsi=8.8 terms raise=7 settle=11 overshoot=0.365574
+227e85d	15.012830	keep	micro tune steering near best	n=13 ctrl=0.54 qv=0.0068 qpsi=8.82 terms raise=7 settle=8 overshoot=0.012830
+6e58e58	15.012825	keep	micro tune steering upper edge	n=13 ctrl=0.54 qv=0.0068 qpsi=8.84 terms raise=7 settle=8 overshoot=0.012825
+80101de	15.012841	discard	micro tune steering crest	n=13 ctrl=0.54 qv=0.0068 qpsi=8.86 terms raise=7 settle=8 overshoot=0.012841

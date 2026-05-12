@@ -1,0 +1,13 @@
+Lane-change MPC QP benchmark
+params: {'prediction_horizon': 13, 'control_horizon_fraction': 0.54, 'q_delta_u_v': 0.0068, 'q_delta_u_psi': 8.84}
+control_horizon: 7
+fixed_limits: w=[-0.6, 3.6] m, theta=[-90.0, 90.0] deg, v=[0.278, 25.000] m/s ([1.0, 90.0] km/h), psi=[-45.0, 45.0] deg, v_dot=[-4.0, 4.0] m/s^2, psi_dot=[-60.0, 60.0] deg/s
+scenario_config: num_scenarios=1
+---
+objective: 15.012825
+t_raise: 7.000000
+settling_time: 8.000000
+overshoot_cost: 0.012825
+collision_count: 0
+collision_cost: 0.000000
+tracking_plot: /home/lcannelli/autoresearch/lane_mpc_qp_tracking.png
